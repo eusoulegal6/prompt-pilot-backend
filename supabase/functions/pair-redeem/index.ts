@@ -117,5 +117,13 @@ serve(async (req) => {
     console.warn("pair-redeem getUserById warning:", (e as Error).message);
   }
 
-  return jsonResponse({ extensionToken: `ext_${rawToken}`, userEmail });
+  const fullToken = `ext_${rawToken}`;
+  return jsonResponse({
+    // Canonical fields (used by Chrome extension)
+    token: fullToken,
+    userId: codeRow.user_id,
+    userEmail,
+    // Back-compat alias
+    extensionToken: fullToken,
+  });
 });
