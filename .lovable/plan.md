@@ -1,40 +1,55 @@
 
-The dashboard is calling `POST /functions/v1/review-resolve` but that function doesn't exist on this backend yet — hence "Failed to fetch" (CORS preflight has nothing to respond). I'll add it, mirroring the auth + CORS pattern from `review-list` and `usage-get`.
+## Context
 
-## What to build
+You have two projects:
 
-**New file: `supabase/functions/review-resolve/index.ts`**
+- **This project** (`ocpphyjkstvfespxrajk`) — the backend. It has all the tables (`account_apps`, `app_settings`, `extension_pair_codes`, `extension_tokens`, `reply_logs`, `usage_counters`, etc.) and the deployed edge functions (`pair-create`, `pair-redeem`, `review-list`, `review-resolve`, `usage-get`, `draft-gmail-reply`). `ANTHROPIC_API_KEY` is now set.
+- **[Whatsapp Reply Hub](/projects/1a50ee9b-cd11-44ed-8b71-d21bfe1b33fc)** — the rebranded WhatsReply frontend. After the remix, its own Lovable Cloud was provisioned as a fresh, empty project (`zzqdzubykkglytjdecqe`), but the UI still calls the *original* hardcoded backend (`uexdjvbdqwrzlgfrpgbl`). Neither matches this backend.
 
-- Method: `POST`
-- CORS: same headers as `review-list` (`authorization, apikey, content-type, x-client-info`), handle `OPTIONS` preflight
-- Auth: same bridged-JWT pattern as `review-list` / `usage-get` — read `Authorization: Bearer <jwt>`, resolve user via local `auth.getUser` first, fall back to partner project (`uxhtrpwgfqknxqzhssoe`) verification + bridge user lookup
-- Body: `{ "id": "<reply_logs.id>" }` (validate it's a uuid string)
-- Action: `UPDATE reply_logs SET decision = 'resolved' WHERE id = $1 AND user_id = <authed user> AND decision IN ('review','needs_review','flagged')` using the service-role client (RLS allows only SELECT on this table)
-- Response: `{ ok: true, id, decision: 'resolved' }` on success, `{ ok: false, error }` with appropriate status on failure
-- Always return CORS headers, including on errors
+Goal: make the WhatsReply frontend talk to **this** backend so auth, usage, flagged reviews, and extension pairing all work end-to-end against the data and functions you actually own.
 
-**Update `supabase/config.toml`**
+## Recommended approach
 
-Add:
+Point the frontend's Supabase client AND all hardcoded edge-function URLs at this project (`ocpphyjkstvfespxrajk`). Use the existing publishable anon key from this project's `.env`.
+
+Note: cross-project file edits require switching to the WhatsReply project to apply them. This plan documents exactly what to change there.
+
+## Changes to apply in the WhatsReply project
+
+### 1. Update `.env`
+Replace the three `VITE_SUPABASE_*` values with this backend's:
 ```
-[functions.review-resolve]
-verify_jwt = false
+VITE_SUPABASE_PROJECT_ID="ocpphyjkstvfespxrajk"
+VITE_SUPABASE_URL="https://ocpphyjkstvfespxrajk.supabase.co"
+VITE_SUPABASE_PUBLISHABLE_KEY="<anon key from this project>"
 ```
-(matches the other bridged endpoints — we verify manually).
+(Lovable manages `.env` automatically once the WhatsReply project's Cloud is re-linked — see step 5.)
 
-## Why this matches the existing pattern
+### 2. Replace hardcoded URLs + anon keys in 4 frontend files
+Swap the `uexdjvbdqwrzlgfrpgbl.supabase.co` host and its anon key for this project's host/anon key, OR refactor to use `import.meta.env.VITE_SUPABASE_URL` + `VITE_SUPABASE_PUBLISHABLE_KEY` (preferred — no hardcoded values):
 
-- `review-list` already filters by `decision IN ('review','needs_review','flagged')`. Setting `decision = 'resolved'` removes the row from that query naturally — no new column, no migration.
-- No RLS changes needed: the function uses the service-role key after manually authenticating the user, just like `review-list` does for SELECT.
-- Frontend is already wired (optimistic removal + toast), so once deployed the "I replied" button will work.
+- `src/components/ConnectExtension.tsx` → `pair-create`
+- `src/hooks/useFlaggedEmails.ts` → `review-list`
+- `src/hooks/useResolveFlagged.ts` → `review-resolve`
+- `src/hooks/useSendSmartUsage.ts` → `usage-get`
 
-## Out of scope
+### 3. Regenerate Supabase types
+After repointing, regenerate `src/integrations/supabase/types.ts` so the client knows about this backend's schema (tables like `usage_counters`, `reply_logs`, etc.).
 
-- No DB migration, no RLS change, no changes to `review-list`, `usage-get`, `pair-*`, or `draft-gmail-reply`.
-- No extension changes.
+### 4. Verify auth + RLS alignment
+Users who sign up in the WhatsReply UI will create accounts in **this** backend's `auth.users`. RLS on `account_apps`, `app_settings`, `usage_counters`, `reply_logs`, `extension_pair_codes`, `extension_tokens` is keyed on `auth.uid()`, so each user only sees their own rows — no schema changes needed.
 
-## Verify after deploy
+### 5. Re-link Lovable Cloud (one option)
+The cleanest path is to disable the empty Cloud (`zzqdzubykkglytjdecqe`) on the WhatsReply project and treat this project's backend as a plain remote Supabase the frontend talks to via env vars. The WhatsReply project does not need its own Cloud at all — it only needs the URL + anon key to call this backend's edge functions and tables.
 
-- `OPTIONS /functions/v1/review-resolve` returns 204 with CORS headers.
-- `POST` without auth → 401 with CORS headers.
-- `POST` with valid bridged JWT + valid `id` → flips `decision` to `resolved`, row disappears from next `review-list` call, dashboard card removal sticks after refresh.
+## Open question
+
+Do you want users who sign up in WhatsReply to share the same auth pool as this project (recommended — it's already what happens once you repoint), or kept separate? Separate would require keeping a second backend and copying the schema/functions over, which defeats the purpose of this consolidation.
+
+## Outcome
+
+After these edits, the WhatsReply UI will:
+- authenticate against this backend's Supabase auth
+- read usage from `usage_counters` via `usage-get`
+- list/resolve flagged items via `review-list` / `review-resolve`
+- pair the Chrome extension via `pair-create` (which can then call `draft-gmail-reply` using the `ANTHROPIC_API_KEY` you just set)
