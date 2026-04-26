@@ -76,7 +76,7 @@ async function tryPartnerVerify(token: string): Promise<
  * is stable and unique per partner user, even if their real email changes.
  */
 async function resolvePartnerUserId(
-  admin: AdminClient,
+  admin: any,
   partnerRef: string,
   sub: string,
 ): Promise<string | null> {

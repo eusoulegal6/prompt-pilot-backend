@@ -65,7 +65,7 @@ async function tryPartnerVerify(token: string): Promise<
 }
 
 async function resolvePartnerUserId(
-  admin: AdminClient,
+  admin: any,
   partnerRef: string,
   sub: string,
 ): Promise<string | null> {
