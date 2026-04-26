@@ -18,6 +18,7 @@ const MAX_ACTIVE_CODES = 5;
 // Users from these projects get an auto-provisioned Send Smart user on first use.
 const PARTNER_PROJECTS: Array<{ ref: string; url: string }> = [
   { ref: "uxhtrpwgfqknxqzhssoe", url: "https://uxhtrpwgfqknxqzhssoe.supabase.co" }, // Smart Reply Hub
+  { ref: "zzqdzubykkglytjdecqe", url: "https://zzqdzubykkglytjdecqe.supabase.co" }, // WhatsReply
 ];
 
 const partnerJwks = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
