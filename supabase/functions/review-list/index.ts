@@ -14,6 +14,7 @@ const SNIPPET_MAX = 200;
 
 const PARTNER_PROJECTS: Array<{ ref: string; url: string }> = [
   { ref: "uxhtrpwgfqknxqzhssoe", url: "https://uxhtrpwgfqknxqzhssoe.supabase.co" },
+  { ref: "zzqdzubykkglytjdecqe", url: "https://zzqdzubykkglytjdecqe.supabase.co" },
 ];
 
 const partnerJwks = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
