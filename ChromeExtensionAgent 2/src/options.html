@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gmail Auto Reply Settings</title>
+    <link rel="stylesheet" href="options.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="panel">
+        <p class="eyebrow">Setup</p>
+        <h1>Configure Gmail Auto Reply</h1>
+        <p class="intro">Replies now use your built-in secure backend. Leave the writing fields blank if you want the A.I. to reply in its normal style, then just turn the safety switches on or off and click <strong>Save changes</strong>.</p>
+
+        <div class="tab-bar" role="tablist" aria-label="Settings pages">
+          <button id="configuration-tab" class="tab-button active" type="button" role="tab" aria-selected="true" aria-controls="settings-form">Configuration</button>
+          <button id="sandbox-tab" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="sandbox-panel">Sandbox</button>
+        </div>
+
+        <form id="settings-form" class="form" data-tab-panel="configuration" aria-labelledby="configuration-tab">
+          <section class="section">
+            <div class="section-header">
+              <h2>Reply Rules</h2>
+              <p>Choose how the A.I. decides which emails deserve a reply.</p>
+            </div>
+
+            <div class="choice-grid" role="radiogroup" aria-label="Reply rules mode">
+              <label class="choice-card">
+                <input id="reply-rules-standard" type="radio" name="reply-rules-mode" value="standard" />
+                <span class="choice-copy">
+                  <strong>Reply to normal emails</strong>
+                  <small>Best for most people. The A.I. replies to normal human emails and still skips obvious no-reply cases like automated confirmations, receipts, shipping updates, newsletters, and system notices.</small>
+                </span>
+              </label>
+
+              <label class="choice-card">
+                <input id="reply-rules-custom" type="radio" name="reply-rules-mode" value="custom" />
+                <span class="choice-copy">
+                  <strong>Use my own instructions</strong>
+                  <small>Tell the A.I. in plain language which emails to answer or skip, and it will use that when deciding what to do.</small>
+                </span>
+              </label>
+            </div>
+
+            <label id="reply-rules-instructions-field" class="field">
+              <span>Custom reply instructions</span>
+              <textarea id="reply-rules-instructions" rows="5" placeholder="Example: Reply to real clients and leads. Skip invoices, promo emails, and platform confirmations."></textarea>
+            </label>
+
+            <label class="switch-row">
+              <span class="switch-copy">
+                <strong>Leave certain emails for me</strong>
+                <small>Off by default. Turn this on only if you want the A.I. to stop and hand specific kinds of emails back to you instead of replying.</small>
+              </span>
+              <span class="switch">
+                <input id="attention-rules-enabled" type="checkbox" />
+                <span class="switch-ui" aria-hidden="true"></span>
+              </span>
+            </label>
+
+            <label id="attention-rules-field" class="field field-disabled">
+              <span>Emails to leave for me</span>
+              <textarea id="attention-rules" rows="5" placeholder="Example: Leave refund disputes, contract changes, legal questions, angry complaints, and anything involving exceptions or negotiation for me."></textarea>
+            </label>
+          </section>
+
+          <section class="section">
+            <div class="section-header">
+              <h2>Optional</h2>
+              <p>You can skip these writing fields entirely and the extension will still draft replies using the A.I.'s normal style.</p>
+            </div>
+
+            <p class="helper-copy">Use these writing fields only if you want to personalize your voice, add a signature, or teach the A.I. details about your business.</p>
+          </section>
+
+          <section class="section">
+            <div class="section-header">
+              <h2>How The A.I. Should Reply</h2>
+              <p>Use these fields to teach the assistant who you are, how you write, and what details it should remember.</p>
+            </div>
+
+            <label class="field">
+              <span>Identity</span>
+              <textarea id="identity" rows="4" placeholder="Example: I am Henrique, founder of Studio X. I reply in first person and represent a small design agency."></textarea>
+            </label>
+
+            <label class="field">
+              <span>Tone and behavior</span>
+              <textarea id="reply-style" rows="4" placeholder="Example: Friendly, concise, calm, confident, never pushy, and always clear about next steps."></textarea>
+            </label>
+
+            <label class="field">
+              <span>Business context or knowledge</span>
+              <textarea id="knowledge" rows="6" placeholder="Add facts the A.I. should know when replying, such as your services, pricing rules, availability, process, FAQs, and preferred answers."></textarea>
+            </label>
+
+            <label class="field">
+              <span>Signature</span>
+              <textarea id="signature" rows="4" placeholder="Example: Best,&#10;Henrique&#10;Studio X"></textarea>
+            </label>
+
+            <label class="field">
+              <span>Extra reply instructions</span>
+              <textarea id="system-prompt" rows="4" placeholder="Anything special the A.I. should always remember when replying."></textarea>
+            </label>
+          </section>
+
+          <section class="section">
+            <div class="section-header">
+              <h2>Safety Switches</h2>
+              <p>These apply even if you leave every writing field blank. Unread-only mode is now always on, so the automation only works through unread emails and can restart cleanly at any time.</p>
+            </div>
+
+            <div class="info-row">
+              <span class="switch-copy">
+                <strong>Unread emails only</strong>
+                <small>This is always on. If an email is already read, the automation ignores it and moves on.</small>
+              </span>
+              <span class="badge-pill">Always on</span>
+            </div>
+
+            <label class="switch-row">
+              <span class="switch-copy">
+                <strong>Skip emails already replied to</strong>
+                <small>If Gmail marks a thread as already answered, the extension skips it unless there is a fresh unread follow-up.</small>
+              </span>
+              <span class="switch">
+                <input id="skip-replied-threads" type="checkbox" />
+                <span class="switch-ui" aria-hidden="true"></span>
+              </span>
+            </label>
+
+            <label class="switch-row">
+              <span class="switch-copy">
+                <strong>Skip no-reply senders</strong>
+                <small>Automatically skips senders like <code>no-reply</code>, <code>noreply</code>, and similar automated addresses.</small>
+              </span>
+              <span class="switch">
+                <input id="skip-no-reply-senders" type="checkbox" />
+                <span class="switch-ui" aria-hidden="true"></span>
+              </span>
+            </label>
+
+            <label class="switch-row">
+              <span class="switch-copy">
+                <strong>Auto-send only first-contact emails</strong>
+                <small>In automatic mode, ongoing conversations stay here for review instead of being sent automatically.</small>
+              </span>
+              <span class="switch">
+                <input id="auto-send-first-contact-only" type="checkbox" />
+                <span class="switch-ui" aria-hidden="true"></span>
+              </span>
+            </label>
+          </section>
+
+          <section class="section">
+            <div class="section-header">
+              <h2>Advanced Inbox Filters</h2>
+              <p>Use these only if you want more control over who should or should not receive replies.</p>
+            </div>
+
+            <label class="field">
+              <span>Only reply to these senders</span>
+              <textarea id="allowed-senders" rows="4" placeholder="Optional. Add emails, domains, or names separated by commas or new lines. Example: client.com&#10;vip@company.com"></textarea>
+            </label>
+
+            <label class="field">
+              <span>Never reply to these senders</span>
+              <textarea id="ignored-senders" rows="4" placeholder="Example: no-reply@&#10;notifications@&#10;billing@"></textarea>
+            </label>
+
+            <label class="field">
+              <span>Ignore emails with these subject words</span>
+              <textarea id="ignored-subjects" rows="4" placeholder="Example: receipt&#10;invoice&#10;confirmation"></textarea>
+            </label>
+          </section>
+
+          <div class="actions">
+            <button type="submit">Save changes</button>
+            <span id="save-status" class="save-status" aria-live="polite">Current settings loaded.</span>
+          </div>
+        </form>
+
+        <section id="sandbox-panel" class="sandbox hidden" data-tab-panel="sandbox" aria-labelledby="sandbox-tab">
+          <section class="section sandbox-hero">
+            <div class="section-header">
+              <h2>Test Your Setup</h2>
+              <p>This does not send anything. It runs a mock email through your latest saved settings so you can see exactly how the A.I. would respond.</p>
+            </div>
+
+            <div class="sandbox-callout">
+              <strong>Save first, then test.</strong>
+              <span id="sandbox-hint">The sandbox always uses your latest saved configuration.</span>
+            </div>
+          </section>
+
+          <form id="sandbox-form" class="form">
+            <section class="section">
+              <div class="section-header">
+                <h2>Mock Email</h2>
+                <p>Paste a realistic email here and see whether the A.I. would reply, skip it, or leave it for you.</p>
+              </div>
+
+              <div class="sandbox-grid">
+                <label class="field">
+                  <span>Sender name</span>
+                  <input id="sandbox-sender-name" type="text" placeholder="Example: Alice Chen" />
+                </label>
+
+                <label class="field">
+                  <span>Sender email</span>
+                  <input id="sandbox-sender-email" type="email" placeholder="alice@example.com" />
+                </label>
+              </div>
+
+              <label class="field">
+                <span>Subject</span>
+                <input id="sandbox-subject" type="text" placeholder="Example: Quick question about pricing" />
+              </label>
+
+              <label class="field">
+                <span>Latest email message</span>
+                <textarea id="sandbox-latest-message" rows="8" placeholder="Paste the email you want to test here."></textarea>
+              </label>
+
+              <label class="field">
+                <span>Earlier thread context</span>
+                <textarea id="sandbox-thread-history" rows="5" placeholder="Optional. Paste any previous messages here if you want the A.I. to see more context."></textarea>
+              </label>
+
+              <div class="actions">
+                <button id="sandbox-run-button" type="submit">Test the A.I.</button>
+                <button id="sandbox-fill-sample" class="secondary" type="button">Load sample email</button>
+                <span id="sandbox-status" class="save-status" aria-live="polite">Ready to test.</span>
+              </div>
+            </section>
+
+            <section id="sandbox-result-card" class="section sandbox-result hidden">
+              <div class="section-header">
+                <h2 id="sandbox-result-title">Sandbox Result</h2>
+                <p id="sandbox-result-summary">Your test result will appear here.</p>
+              </div>
+
+              <div id="sandbox-result-meta" class="sandbox-result-meta"></div>
+              <pre id="sandbox-result-body" class="sandbox-result-body"></pre>
+            </section>
+          </form>
+        </section>
+      </section>
+    </main>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

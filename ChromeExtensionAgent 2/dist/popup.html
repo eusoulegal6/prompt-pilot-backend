@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gmail Auto Reply</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="popup">
+      <section class="hero">
+        <p class="eyebrow">Gmail Auto Reply</p>
+        <h1>Reply to Gmail with the A.I.</h1>
+        <p id="hero-copy" class="message">Keep inbox replies moving automatically, or draft just one email when you need it.</p>
+
+        <div class="actions">
+          <button id="options-button" type="button" class="secondary">Settings</button>
+        </div>
+      </section>
+
+      <section id="context-card" class="card stack hidden">
+        <div class="status-row">
+          <span class="label">Current Tab</span>
+          <span class="badge">Needs Gmail</span>
+        </div>
+        <p id="context-title" class="support-copy strong">Open Gmail in the active tab to use this extension.</p>
+        <p id="context-help" class="support-copy">The automation works on <code>mail.google.com</code>. Once Gmail is open, click the extension again.</p>
+      </section>
+
+      <section id="automation-card" class="card stack hidden">
+        <div class="status-row">
+          <span class="label">Automation</span>
+          <span class="badge">Gmail</span>
+        </div>
+
+        <div class="field mode-field">
+          <span class="label">Reply Mode</span>
+          <div class="mode-toggle" role="group" aria-label="Reply mode">
+            <button id="mode-review-button" type="button" class="mode-button">Review each reply</button>
+            <button id="mode-auto-button" type="button" class="mode-button">Send automatically</button>
+          </div>
+        </div>
+
+        <p id="mode-help" class="support-copy">Review mode drafts inside Gmail and waits for you to press Send in Gmail.</p>
+        <p id="attention-message" class="support-copy warning hidden"></p>
+        <p id="pending-review-message" class="support-copy highlight hidden"></p>
+
+        <div class="actions">
+          <button id="monitor-toggle-button" type="button">Start</button>
+          <button id="open-review-button" type="button" class="secondary hidden">Open current draft</button>
+        </div>
+
+        <p id="monitor-summary" class="support-copy">Automation is paused.</p>
+      </section>
+
+      <section id="manual-card" class="card stack hidden">
+        <div class="status-row">
+          <span class="label">Non-automation</span>
+          <span class="badge">One Email</span>
+        </div>
+
+        <p id="manual-help" class="support-copy">Open a Gmail email and click once to let the A.I. draft a reply without sending it.</p>
+
+        <div class="actions">
+          <button id="manual-draft-button" type="button">Draft this email</button>
+        </div>
+      </section>
+
+      <section id="attention-card" class="card stack hidden">
+        <div class="status-row">
+          <span class="label">Needs Your Attention</span>
+          <span id="attention-count" class="badge warn">0</span>
+        </div>
+
+        <p class="support-copy">These emails were left for you because they seem harder, more sensitive, or need your judgment.</p>
+        <div id="attention-queue" class="queue-list"></div>
+      </section>
+
+      <section id="no-reply-card" class="card stack hidden">
+        <div class="status-row">
+          <span class="label">No Reply Needed</span>
+          <span id="no-reply-count" class="badge">0</span>
+        </div>
+
+        <details class="skipped-section">
+          <summary id="no-reply-summary">Show emails</summary>
+          <div id="no-reply-queue" class="queue-list"></div>
+        </details>
+      </section>
+
+      <section class="stack footer">
+        <div class="status-row">
+          <span class="label">Status</span>
+          <span id="status-text" class="status">Ready</span>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
