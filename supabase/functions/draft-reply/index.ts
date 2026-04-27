@@ -314,7 +314,11 @@ serve(async (req) => {
   const appKey = provider === "whatsapp" ? "whatsreply" : provider || "whatsreply";
 
   if (decision !== "reply") {
-    console.log(`draft-reply log-only user=${userId} decision=${decision} provider=${provider}`);
+    const reviewSummary = truncate(str(body.reviewSummary), 500);
+    const reviewReason = truncate(str(body.reviewReason), 100);
+    console.log(
+      `draft-reply log-only user=${userId} decision=${decision} provider=${provider} reason="${reviewReason}"`,
+    );
     recordUsage(
       userId,
       period,
@@ -324,7 +328,19 @@ serve(async (req) => {
       SUPABASE_URL,
       SUPABASE_SERVICE_ROLE_KEY,
     );
-    return jsonResponse({ ok: true, logged: true, decision });
+    if (decision === "review") {
+      return jsonResponse({
+        decision: "review",
+        reviewSummary: reviewSummary || "Flagged for human review.",
+        reviewReason: reviewReason || "unclear",
+      });
+    }
+    // skip
+    return jsonResponse({
+      decision: "skip",
+      reviewSummary,
+      reviewReason,
+    });
   }
 
   if (!latestMessage && threadMessages.length === 0) {
@@ -438,7 +454,7 @@ Draft the reply now.`;
       SUPABASE_SERVICE_ROLE_KEY,
     );
 
-    return jsonResponse({ draft, model, inputTokens, outputTokens });
+    return jsonResponse({ decision: "reply", draft, model, inputTokens, outputTokens });
   } catch (err) {
     clearTimeout(timeout);
     if (err instanceof DOMException && err.name === "AbortError") {
