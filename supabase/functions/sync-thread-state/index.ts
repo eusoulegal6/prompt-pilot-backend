@@ -211,12 +211,15 @@ serve(async (req) => {
   // Derive review_active state from event + status
   let reviewActive: boolean;
   let reviewResolvedAt: string | null = null;
+  let reviewOpenedAt: string | null = null;
   if (eventType === "review_flagged") {
     reviewActive = true;
+    reviewOpenedAt = occurredAt;
   } else if (eventType === "draft_saved") {
     // clears review only if status is not a review state
     reviewActive = statusValue === "review_ready";
     if (!reviewActive) reviewResolvedAt = new Date().toISOString();
+    if (reviewActive) reviewOpenedAt = occurredAt;
   } else if (eventType === "reply_sent" || eventType === "review_resolved") {
     reviewActive = false;
     reviewResolvedAt = new Date().toISOString();
@@ -262,6 +265,13 @@ serve(async (req) => {
     last_event_type: eventType,
     last_event_at: occurredAt,
   };
+  if (reviewOpenedAt) {
+    upsertBody.review_opened_at = reviewOpenedAt;
+  }
+  if (eventType === "review_flagged") {
+    // Explicitly clear any previous resolution timestamp
+    upsertBody.review_resolved_at = null;
+  }
 
   // Upsert by (user_id, provider, thread_id)
   const upsertUrl =
@@ -308,6 +318,7 @@ serve(async (req) => {
         review_reason: reviewReason,
         review_summary: reviewSummary,
         occurred_at: occurredAt,
+        payload: body,
       }),
     }).catch((e) => console.warn("history insert failed:", (e as Error).message));
   }
