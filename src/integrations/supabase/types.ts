@@ -219,6 +219,7 @@ export type Database = {
           event_type: string
           id: string
           occurred_at: string | null
+          payload: Json | null
           provider: string
           review_reason: string
           review_summary: string
@@ -233,6 +234,7 @@ export type Database = {
           event_type: string
           id?: string
           occurred_at?: string | null
+          payload?: Json | null
           provider: string
           review_reason?: string
           review_summary?: string
@@ -247,6 +249,7 @@ export type Database = {
           event_type?: string
           id?: string
           occurred_at?: string | null
+          payload?: Json | null
           provider?: string
           review_reason?: string
           review_summary?: string
@@ -287,6 +290,7 @@ export type Database = {
           queue_scope: string | null
           queued_at: string | null
           review_active: boolean
+          review_opened_at: string | null
           review_reason: string
           review_resolved_at: string | null
           review_summary: string
@@ -322,6 +326,7 @@ export type Database = {
           queue_scope?: string | null
           queued_at?: string | null
           review_active?: boolean
+          review_opened_at?: string | null
           review_reason?: string
           review_resolved_at?: string | null
           review_summary?: string
@@ -357,6 +362,7 @@ export type Database = {
           queue_scope?: string | null
           queued_at?: string | null
           review_active?: boolean
+          review_opened_at?: string | null
           review_reason?: string
           review_resolved_at?: string | null
           review_summary?: string

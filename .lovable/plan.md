@@ -1,55 +1,145 @@
+## Goal
 
-## Context
+Make the backend match the extension contract you described:
 
-You have two projects:
+1. `draft-reply` returns strict JSON, and *never* puts "I can't reply to this" prose into `draft`. It self-corrects to `decision: "review"` when the model produces a refusal.
+2. `sync-thread-state` already exists and largely works — align its event semantics, field names, and audit trail to the spec.
 
-- **This project** (`ocpphyjkstvfespxrajk`) — the backend. It has all the tables (`account_apps`, `app_settings`, `extension_pair_codes`, `extension_tokens`, `reply_logs`, `usage_counters`, etc.) and the deployed edge functions (`pair-create`, `pair-redeem`, `review-list`, `review-resolve`, `usage-get`, `draft-gmail-reply`). `ANTHROPIC_API_KEY` is now set.
-- **[Whatsapp Reply Hub](/projects/1a50ee9b-cd11-44ed-8b71-d21bfe1b33fc)** — the rebranded WhatsReply frontend. After the remix, its own Lovable Cloud was provisioned as a fresh, empty project (`zzqdzubykkglytjdecqe`), but the UI still calls the *original* hardcoded backend (`uexdjvbdqwrzlgfrpgbl`). Neither matches this backend.
+Auth (extension `ext_...` bearer + JWT fallback) and quota behavior stay exactly as they are.
 
-Goal: make the WhatsReply frontend talk to **this** backend so auth, usage, flagged reviews, and extension pairing all work end-to-end against the data and functions you actually own.
+---
 
-## Recommended approach
+## 1. Update `supabase/functions/draft-reply/index.ts`
 
-Point the frontend's Supabase client AND all hardcoded edge-function URLs at this project (`ocpphyjkstvfespxrajk`). Use the existing publishable anon key from this project's `.env`.
+Keep all existing infrastructure: `resolveUserId`, `checkQuota`, `recordUsage`, CORS, Anthropic call, timeouts, model. Only change the prompt + response-validation layer.
 
-Note: cross-project file edits require switching to the WhatsReply project to apply them. This plan documents exactly what to change there.
+### a. Stronger system prompt — force structured JSON
 
-## Changes to apply in the WhatsReply project
+Replace the current "return only the message text" system prompt with one that asks Claude to emit a small JSON object so we can route reply / review / skip without regex-sniffing prose:
 
-### 1. Update `.env`
-Replace the three `VITE_SUPABASE_*` values with this backend's:
 ```
-VITE_SUPABASE_PROJECT_ID="ocpphyjkstvfespxrajk"
-VITE_SUPABASE_URL="https://ocpphyjkstvfespxrajk.supabase.co"
-VITE_SUPABASE_PUBLISHABLE_KEY="<anon key from this project>"
+You are an assistant that decides whether to draft a reply on {providerLabel}, and if so, drafts it.
+
+Return ONE JSON object, no markdown, no code fences, matching exactly one of:
+
+  { "decision": "reply",  "draft": "<message text>" }
+  { "decision": "review", "reviewReason": "<snake_case>", "reviewSummary": "<short sentence>" }
+  { "decision": "skip",   "reviewReason": "<snake_case>", "reviewSummary": "<short sentence>" }
+
+Choose "review" or "skip" (NOT "reply") when the latest message is:
+- automated, menu-driven, OTP, or a bot prompt  -> reason "menu_bot" or "automated_system"
+- a broadcast / notification / system message    -> "broadcast_or_notification"
+- missing context to safely respond              -> "missing_context"
+- sensitive (legal, medical, financial advice)   -> "sensitive_request"
+- something that needs human judgment            -> "needs_human_judgment"
+- a thread where no reply is appropriate         -> "no_reply"
+
+If decision is "reply":
+- "draft" is ONLY the message text the user will send. No quotes, no labels, no markdown, no commentary.
+- Match {providerLabel} conventions: short, conversational, sentence-case.
+- Never invent facts, prices, dates, commitments.
+- No greeting if mid-thread. Under 3 short sentences unless clearly required.
+- Never put refusal/explanation text into "draft". If you would refuse, return decision "review" instead.
+{identity / style / knowledge / extra / signature blocks unchanged}
 ```
-(Lovable manages `.env` automatically once the WhatsReply project's Cloud is re-linked — see step 5.)
 
-### 2. Replace hardcoded URLs + anon keys in 4 frontend files
-Swap the `uexdjvbdqwrzlgfrpgbl.supabase.co` host and its anon key for this project's host/anon key, OR refactor to use `import.meta.env.VITE_SUPABASE_URL` + `VITE_SUPABASE_PUBLISHABLE_KEY` (preferred — no hardcoded values):
+### b. Parse + validate the model output
 
-- `src/components/ConnectExtension.tsx` → `pair-create`
-- `src/hooks/useFlaggedEmails.ts` → `review-list`
-- `src/hooks/useResolveFlagged.ts` → `review-resolve`
-- `src/hooks/useSendSmartUsage.ts` → `usage-get`
+After the Anthropic call:
 
-### 3. Regenerate Supabase types
-After repointing, regenerate `src/integrations/supabase/types.ts` so the client knows about this backend's schema (tables like `usage_counters`, `reply_logs`, etc.).
+1. Try `JSON.parse` on `cleanDraft(rawDraft)`.
+2. If parse fails, fall back: treat `rawDraft` as a candidate draft string and run heuristic detection (below).
+3. If parse succeeds, validate:
+   - `decision ∈ {reply, review, skip}` else → review/`needs_human_judgment`.
+   - For `reply`: require non-empty `draft`. Run heuristic detection on it; if it looks like a refusal, convert to `review`/`automated_system`.
+   - For `review` / `skip`: clamp `reviewReason` to the allowed set (else `needs_human_judgment`), truncate `reviewSummary` ≤ 500.
 
-### 4. Verify auth + RLS alignment
-Users who sign up in the WhatsReply UI will create accounts in **this** backend's `auth.users`. RLS on `account_apps`, `app_settings`, `usage_counters`, `reply_logs`, `extension_pair_codes`, `extension_tokens` is keyed on `auth.uid()`, so each user only sees their own rows — no schema changes needed.
+### c. Refusal-detection heuristic
 
-### 5. Re-link Lovable Cloud (one option)
-The cleanest path is to disable the empty Cloud (`zzqdzubykkglytjdecqe`) on the WhatsReply project and treat this project's backend as a plain remote Supabase the frontend talks to via env vars. The WhatsReply project does not need its own Cloud at all — it only needs the URL + anon key to call this backend's edge functions and tables.
+A small regex test on the draft text. If it matches, override to `review`:
 
-## Open question
+```
+/(i (should|cannot|can'?t|won'?t) (draft|reply|respond|provide))|
+ (this (appears|seems) to be (an )?(automated|system|bot))|
+ (no (visible )?options to respond)|
+ (cannot generate (a )?reply)|
+ (as an ai)/i
+```
 
-Do you want users who sign up in WhatsReply to share the same auth pool as this project (recommended — it's already what happens once you repoint), or kept separate? Separate would require keeping a second backend and copying the schema/functions over, which defeats the purpose of this consolidation.
+Override payload:
+```json
+{ "decision": "review",
+  "reviewReason": "automated_system",
+  "reviewSummary": "Automated or menu-driven message; do not auto-reply." }
+```
 
-## Outcome
+### d. Response shapes (strict)
 
-After these edits, the WhatsReply UI will:
-- authenticate against this backend's Supabase auth
-- read usage from `usage_counters` via `usage-get`
-- list/resolve flagged items via `review-list` / `review-resolve`
-- pair the Chrome extension via `pair-create` (which can then call `draft-gmail-reply` using the `ANTHROPIC_API_KEY` you just set)
+- Reply: `{ decision: "reply", draft, model, inputTokens, outputTokens }`
+- Review: `{ decision: "review", reviewReason, reviewSummary, model, inputTokens, outputTokens }`
+- Skip: `{ decision: "skip", reviewReason, reviewSummary, model, inputTokens, outputTokens }`
+
+`recordUsage` is already called with `decision`. Keep the rule that only `decision === "reply"` increments `emails_used`. `review`/`skip` still log tokens to `reply_logs` for visibility.
+
+### e. Pre-call short-circuit (unchanged)
+
+If the *client* already passed `decision: "review" | "skip"`, keep the existing log-only path and return the matching shape — no Anthropic call.
+
+---
+
+## 2. Update `supabase/functions/sync-thread-state/index.ts`
+
+The function exists and the table has the right columns under different names. Two options:
+
+**Option A (chosen):** keep the existing column names (`status_value`, `review_active`, `review_resolved_at`, `thread_state_history`) — they already work and the dashboard will be wired against them. Only adjust event semantics + add the missing field.
+
+Concretely:
+
+1. **Event semantics fix** — current `review_flagged` already sets `review_active = true`, but it does not stamp an "opened at" timestamp. Add a new column `review_opened_at` (see migration below) and set it on `review_flagged`. Clear `review_resolved_at` on `review_flagged`. Leave `draft_saved` / `reply_sent` / `review_resolved` semantics as-is — they already match the spec.
+
+2. **Audit trail** — `thread_state_history` already exists and is appended on every event. Add a `payload jsonb` column so we capture the raw event for debugging (spec asks for it).
+
+3. **Validation** — already strict. No change.
+
+4. **Response** — already `{ ok: true }`. No change.
+
+5. **Auth** — already supports `ext_...` and JWT. No change.
+
+### Migration (schema only)
+
+```sql
+ALTER TABLE public.thread_states
+  ADD COLUMN IF NOT EXISTS review_opened_at timestamptz;
+
+ALTER TABLE public.thread_state_history
+  ADD COLUMN IF NOT EXISTS payload jsonb;
+
+CREATE INDEX IF NOT EXISTS idx_thread_states_active_review
+  ON public.thread_states (user_id, review_active, review_opened_at DESC)
+  WHERE review_active = true;
+```
+
+No new tables, no RLS changes (existing policies already restrict reads to `auth.uid() = user_id`; writes go through the service role inside the function).
+
+---
+
+## 3. Dashboard contract (already satisfied, documenting only)
+
+- "Flagged messages" tile = `count(*) from thread_states where user_id = auth.uid() and review_active = true`.
+- Review queue list = same filter, ordered by `review_opened_at desc, updated_at desc`.
+
+No frontend changes in this plan — dashboard already reads `thread_states` once data starts flowing. The reason the tile is `0` today is the extension still has not started calling `sync-thread-state`; that is an extension-side change, out of scope here.
+
+---
+
+## Files touched
+
+- `supabase/functions/draft-reply/index.ts` — prompt + JSON parsing + refusal heuristic
+- `supabase/functions/sync-thread-state/index.ts` — set `review_opened_at` on `review_flagged`, write `payload` jsonb to history
+- `supabase/migrations/<new>.sql` — add `review_opened_at`, `payload`, partial index
+
+## Out of scope
+
+- Extension code changes (the extension lives outside this repo now)
+- Dashboard UI changes (already reads the right table)
+- Auth bridging / Realtime (separate decision, not blocking this work)
