@@ -27,6 +27,47 @@ const QUOTA_INPUT_TOKENS_PER_MONTH = 2_000_000;
 const QUOTA_OUTPUT_TOKENS_PER_MONTH = 500_000;
 const ANTHROPIC_TIMEOUT_MS = 30_000;
 
+const ALLOWED_REVIEW_REASONS = new Set([
+  "automated_system",
+  "menu_bot",
+  "broadcast_or_notification",
+  "missing_context",
+  "sensitive_request",
+  "needs_human_judgment",
+  "no_reply",
+]);
+
+const REFUSAL_REGEX =
+  /(i\s+(should|cannot|can'?t|won'?t)\s+(draft|reply|respond|provide))|(this\s+(appears|seems)\s+to\s+be\s+(an\s+)?(automated|system|bot))|(no\s+(visible\s+)?options\s+to\s+respond)|(cannot\s+generate\s+(a\s+)?reply)|(as\s+an\s+ai)/i;
+
+function clampReason(r: string): string {
+  return ALLOWED_REVIEW_REASONS.has(r) ? r : "needs_human_judgment";
+}
+
+function looksLikeRefusal(s: string): boolean {
+  return REFUSAL_REGEX.test(s);
+}
+
+function tryParseModelJson(raw: string): Record<string, unknown> | null {
+  const trimmed = raw.trim().replace(/^```(?:json)?\s*([\s\S]*?)```$/i, "$1").trim();
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  } catch {
+    // Try to extract the first {...} block
+    const match = trimmed.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        const parsed = JSON.parse(match[0]);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+      } catch {
+        // fallthrough
+      }
+    }
+  }
+  return null;
+}
+
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -368,14 +409,29 @@ serve(async (req) => {
     ? `\nIf appropriate, end with this signature on a new line: ${signature}`
     : "";
 
-  const systemPrompt = `You are drafting a reply on ${providerLabel}.
+  const systemPrompt = `You are an assistant that decides whether to draft a reply on ${providerLabel}, and if so, drafts it.
 
-Rules:
-- Return ONLY the message text the user will send. No quotes, no labels like "Reply:", no markdown formatting, no code fences, no commentary.
+Return ONE JSON object only. No markdown, no code fences, no commentary outside the JSON. It MUST match exactly one of:
+
+  { "decision": "reply",  "draft": "<message text>" }
+  { "decision": "review", "reviewReason": "<snake_case>", "reviewSummary": "<short sentence>" }
+  { "decision": "skip",   "reviewReason": "<snake_case>", "reviewSummary": "<short sentence>" }
+
+Choose "review" or "skip" (NOT "reply") when the latest incoming message is:
+- automated, menu-driven, OTP, or a bot prompt        -> "menu_bot" or "automated_system"
+- a broadcast / notification / system message         -> "broadcast_or_notification"
+- missing context to safely respond                   -> "missing_context"
+- sensitive (legal, medical, financial advice, etc.)  -> "sensitive_request"
+- something that needs human judgment                 -> "needs_human_judgment"
+- a thread where no reply is appropriate              -> "no_reply"
+
+If decision is "reply":
+- "draft" is ONLY the message text the user will send. No quotes, no labels like "Reply:", no markdown, no commentary.
 - Match ${providerLabel} conventions: short, conversational, sentence-case, occasional emoji only if the existing thread uses them.
 - Never invent facts, prices, dates, or commitments not present in the thread.
 - Do not add a greeting if the conversation is mid-thread.
-- Keep it under 3 short sentences unless the situation clearly requires more.${identityBlock}${styleBlock}${knowledgeBlock}${extraBlock}${signatureBlock}`;
+- Keep it under 3 short sentences unless the situation clearly requires more.
+- Never put refusal or explanation text into "draft". If you would refuse, return decision "review" instead with an appropriate reviewReason.${identityBlock}${styleBlock}${knowledgeBlock}${extraBlock}${signatureBlock}`;
 
   const userPrompt = `${chatHeader}${threadContext}
 ${latestMessage ? `\nLatest incoming message to reply to:\n${latestMessage}` : "\nDraft a reply based on the recent messages above."}
@@ -426,22 +482,61 @@ Draft the reply now.`;
     }
 
     const anthropicData = await anthropicRes.json();
-    const rawDraft = anthropicData.content?.[0]?.text ?? "";
-    const draft = cleanDraft(rawDraft);
-
-    if (!draft) {
-      console.error(
-        `Empty draft after cleanup, raw_len=${rawDraft.length} stop_reason=${anthropicData.stop_reason ?? "unknown"}`,
-      );
-      return jsonResponse({ error: "AI returned an empty response." }, 502);
-    }
-
+    const rawText = anthropicData.content?.[0]?.text ?? "";
     const inputTokens = anthropicData.usage?.input_tokens ?? 0;
     const outputTokens = anthropicData.usage?.output_tokens ?? 0;
-
     const elapsed = Date.now() - startTime;
+
+    // Resolve final decision payload
+    let finalDecision: "reply" | "review" | "skip" = "reply";
+    let finalDraft = "";
+    let finalReason = "";
+    let finalSummary = "";
+
+    const parsed = tryParseModelJson(rawText);
+    if (parsed) {
+      const dRaw = String(parsed.decision ?? "").toLowerCase();
+      if (dRaw === "reply" || dRaw === "review" || dRaw === "skip") {
+        finalDecision = dRaw;
+      } else {
+        finalDecision = "review";
+        finalReason = "needs_human_judgment";
+        finalSummary = "Model returned an unexpected decision; please review.";
+      }
+      if (finalDecision === "reply") {
+        finalDraft = cleanDraft(String(parsed.draft ?? ""));
+        if (!finalDraft || looksLikeRefusal(finalDraft)) {
+          finalDecision = "review";
+          finalReason = "automated_system";
+          finalSummary = "Automated or menu-driven message; do not auto-reply.";
+          finalDraft = "";
+        }
+      } else {
+        finalReason = clampReason(String(parsed.reviewReason ?? "").toLowerCase());
+        finalSummary = truncate(String(parsed.reviewSummary ?? finalSummary ?? ""), 500) ||
+          (finalDecision === "skip" ? "Message should not be auto-replied." : "Flagged for human review.");
+      }
+    } else {
+      // Model didn't return JSON. Treat raw as a candidate draft.
+      const candidate = cleanDraft(rawText);
+      if (!candidate) {
+        console.error(
+          `Empty draft after cleanup, raw_len=${rawText.length} stop_reason=${anthropicData.stop_reason ?? "unknown"}`,
+        );
+        return jsonResponse({ error: "AI returned an empty response." }, 502);
+      }
+      if (looksLikeRefusal(candidate)) {
+        finalDecision = "review";
+        finalReason = "automated_system";
+        finalSummary = "Automated or menu-driven message; do not auto-reply.";
+      } else {
+        finalDecision = "reply";
+        finalDraft = candidate;
+      }
+    }
+
     console.log(
-      `draft-reply OK ${elapsed}ms user=${userId} provider=${provider} draft_len=${draft.length} in_tok=${inputTokens} out_tok=${outputTokens}`,
+      `draft-reply OK ${elapsed}ms user=${userId} provider=${provider} decision=${finalDecision} draft_len=${finalDraft.length} reason="${finalReason}" in_tok=${inputTokens} out_tok=${outputTokens}`,
     );
 
     recordUsage(
@@ -449,12 +544,22 @@ Draft the reply now.`;
       period,
       inputTokens,
       outputTokens,
-      { subject: chatTitle, senderEmail: chatTitle, sourceUrl, decision: "reply", appKey },
+      { subject: chatTitle, senderEmail: chatTitle, sourceUrl, decision: finalDecision, appKey },
       SUPABASE_URL,
       SUPABASE_SERVICE_ROLE_KEY,
     );
 
-    return jsonResponse({ decision: "reply", draft, model, inputTokens, outputTokens });
+    if (finalDecision === "reply") {
+      return jsonResponse({ decision: "reply", draft: finalDraft, model, inputTokens, outputTokens });
+    }
+    return jsonResponse({
+      decision: finalDecision,
+      reviewReason: finalReason,
+      reviewSummary: finalSummary,
+      model,
+      inputTokens,
+      outputTokens,
+    });
   } catch (err) {
     clearTimeout(timeout);
     if (err instanceof DOMException && err.name === "AbortError") {
