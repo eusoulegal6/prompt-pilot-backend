@@ -27,6 +27,47 @@ const QUOTA_INPUT_TOKENS_PER_MONTH = 2_000_000;
 const QUOTA_OUTPUT_TOKENS_PER_MONTH = 500_000;
 const ANTHROPIC_TIMEOUT_MS = 30_000;
 
+const ALLOWED_REVIEW_REASONS = new Set([
+  "automated_system",
+  "menu_bot",
+  "broadcast_or_notification",
+  "missing_context",
+  "sensitive_request",
+  "needs_human_judgment",
+  "no_reply",
+]);
+
+const REFUSAL_REGEX =
+  /(i\s+(should|cannot|can'?t|won'?t)\s+(draft|reply|respond|provide))|(this\s+(appears|seems)\s+to\s+be\s+(an\s+)?(automated|system|bot))|(no\s+(visible\s+)?options\s+to\s+respond)|(cannot\s+generate\s+(a\s+)?reply)|(as\s+an\s+ai)/i;
+
+function clampReason(r: string): string {
+  return ALLOWED_REVIEW_REASONS.has(r) ? r : "needs_human_judgment";
+}
+
+function looksLikeRefusal(s: string): boolean {
+  return REFUSAL_REGEX.test(s);
+}
+
+function tryParseModelJson(raw: string): Record<string, unknown> | null {
+  const trimmed = raw.trim().replace(/^```(?:json)?\s*([\s\S]*?)```$/i, "$1").trim();
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  } catch {
+    // Try to extract the first {...} block
+    const match = trimmed.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        const parsed = JSON.parse(match[0]);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+      } catch {
+        // fallthrough
+      }
+    }
+  }
+  return null;
+}
+
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
