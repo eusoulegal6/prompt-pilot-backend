@@ -212,6 +212,167 @@ export type Database = {
         }
         Relationships: []
       }
+      thread_state_history: {
+        Row: {
+          backend_decision: string
+          created_at: string
+          event_type: string
+          id: string
+          occurred_at: string | null
+          provider: string
+          review_reason: string
+          review_summary: string
+          status_value: string
+          thread_id: string
+          thread_state_id: string
+          user_id: string
+        }
+        Insert: {
+          backend_decision?: string
+          created_at?: string
+          event_type: string
+          id?: string
+          occurred_at?: string | null
+          provider: string
+          review_reason?: string
+          review_summary?: string
+          status_value?: string
+          thread_id: string
+          thread_state_id: string
+          user_id: string
+        }
+        Update: {
+          backend_decision?: string
+          created_at?: string
+          event_type?: string
+          id?: string
+          occurred_at?: string | null
+          provider?: string
+          review_reason?: string
+          review_summary?: string
+          status_value?: string
+          thread_id?: string
+          thread_state_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "thread_state_history_thread_state_id_fkey"
+            columns: ["thread_state_id"]
+            isOneToOne: false
+            referencedRelation: "thread_states"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      thread_states: {
+        Row: {
+          backend_decision: string
+          created_at: string
+          draft_preview: string
+          extension_version: string | null
+          id: string
+          last_auto_sent_at: string | null
+          last_auto_sent_message_key: string
+          last_draft_at: string | null
+          last_error: string
+          last_event_at: string | null
+          last_event_type: string | null
+          last_handled_message_key: string
+          last_opened_at: string | null
+          last_sent_at: string | null
+          latest_message: string | null
+          preview: string | null
+          provider: string
+          queue_scope: string | null
+          queued_at: string | null
+          review_active: boolean
+          review_reason: string
+          review_resolved_at: string | null
+          review_summary: string
+          sender: string | null
+          source: string | null
+          source_url: string | null
+          status_value: string
+          subject: string | null
+          thread_id: string
+          thread_url: string | null
+          unread: boolean
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          backend_decision?: string
+          created_at?: string
+          draft_preview?: string
+          extension_version?: string | null
+          id?: string
+          last_auto_sent_at?: string | null
+          last_auto_sent_message_key?: string
+          last_draft_at?: string | null
+          last_error?: string
+          last_event_at?: string | null
+          last_event_type?: string | null
+          last_handled_message_key?: string
+          last_opened_at?: string | null
+          last_sent_at?: string | null
+          latest_message?: string | null
+          preview?: string | null
+          provider?: string
+          queue_scope?: string | null
+          queued_at?: string | null
+          review_active?: boolean
+          review_reason?: string
+          review_resolved_at?: string | null
+          review_summary?: string
+          sender?: string | null
+          source?: string | null
+          source_url?: string | null
+          status_value?: string
+          subject?: string | null
+          thread_id: string
+          thread_url?: string | null
+          unread?: boolean
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          backend_decision?: string
+          created_at?: string
+          draft_preview?: string
+          extension_version?: string | null
+          id?: string
+          last_auto_sent_at?: string | null
+          last_auto_sent_message_key?: string
+          last_draft_at?: string | null
+          last_error?: string
+          last_event_at?: string | null
+          last_event_type?: string | null
+          last_handled_message_key?: string
+          last_opened_at?: string | null
+          last_sent_at?: string | null
+          latest_message?: string | null
+          preview?: string | null
+          provider?: string
+          queue_scope?: string | null
+          queued_at?: string | null
+          review_active?: boolean
+          review_reason?: string
+          review_resolved_at?: string | null
+          review_summary?: string
+          sender?: string | null
+          source?: string | null
+          source_url?: string | null
+          status_value?: string
+          subject?: string | null
+          thread_id?: string
+          thread_url?: string | null
+          unread?: boolean
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       usage_counters: {
         Row: {
           app_key: string
