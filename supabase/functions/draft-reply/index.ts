@@ -606,12 +606,47 @@ serve(async (req) => {
   const quotaBlock = await checkQuota(userId, period, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
   if (quotaBlock) return quotaBlock;
 
+  // ---- Media understanding (optional, best-effort) ----
+  const mediaInputs = sanitizeMediaInputs(body.mediaInputs);
+  let augmentedThread = threadMessages;
+  let augmentedLatest = latestMessage;
+  let mediaAnnotationsCount = 0;
+  if (mediaInputs.length > 0) {
+    try {
+      const annotations = await buildMediaAnnotations(mediaInputs);
+      mediaAnnotationsCount = annotations.length;
+      if (annotations.length > 0) {
+        const merged = mergeAnnotationsIntoThread(threadMessages, annotations);
+        augmentedThread = merged.thread;
+        // For unmatched annotations, append them as additional context lines
+        // and, if the latest message is a placeholder like "[Image]" / "[Voice message ...]",
+        // promote the most recent annotation into augmentedLatest so the model has substance to reply to.
+        const placeholderLatest = /^\s*\[(image|voice message|audio|video|sticker|document)\b/i.test(latestMessage);
+        if (merged.leftover.length > 0) {
+          augmentedThread = [
+            ...augmentedThread,
+            ...merged.leftover.map((a) => truncate(a.annotation, LIMITS.threadMessage + MEDIA_LIMITS.annotationMaxLen)),
+          ];
+        }
+        if (placeholderLatest) {
+          const last = annotations[annotations.length - 1];
+          augmentedLatest = truncate(
+            `${latestMessage}\n${last.annotation}`,
+            LIMITS.latestMessage + MEDIA_LIMITS.annotationMaxLen,
+          );
+        }
+      }
+    } catch (e) {
+      console.warn("media understanding pipeline failed, continuing text-only:", (e as Error).message);
+    }
+  }
+
   const chatHeader = chatTitle
     ? `${providerLabel} chat: "${chatTitle}".`
     : `${providerLabel} chat.`;
   const threadContext =
-    threadMessages.length > 0
-      ? `\n\nRecent messages (oldest first):\n${threadMessages.map((m) => `- ${m}`).join("\n")}`
+    augmentedThread.length > 0
+      ? `\n\nRecent messages (oldest first):\n${augmentedThread.map((m) => `- ${m}`).join("\n")}`
       : "";
   const identityBlock = identity ? `\nYou are replying as: ${identity}` : "";
   const knowledgeBlock = knowledge ? `\nRelevant background knowledge:\n${knowledge}` : "";
@@ -646,7 +681,7 @@ If decision is "reply":
 - Never put refusal or explanation text into "draft". If you would refuse, return decision "review" instead with an appropriate reviewReason.${identityBlock}${styleBlock}${knowledgeBlock}${extraBlock}${signatureBlock}`;
 
   const userPrompt = `${chatHeader}${threadContext}
-${latestMessage ? `\nLatest incoming message to reply to:\n${latestMessage}` : "\nDraft a reply based on the recent messages above."}
+${augmentedLatest ? `\nLatest incoming message to reply to:\n${augmentedLatest}` : "\nDraft a reply based on the recent messages above."}
 
 Draft the reply now.`;
 
@@ -662,7 +697,7 @@ Draft the reply now.`;
 
   try {
     console.log(
-      `draft-reply Request: user=${userId} provider=${provider} period=${period} latest_len=${latestMessage.length} thread_count=${threadMessages.length} style="${replyStyle}"`,
+      `draft-reply Request: user=${userId} provider=${provider} period=${period} latest_len=${latestMessage.length} thread_count=${threadMessages.length} media_in=${mediaInputs.length} media_ok=${mediaAnnotationsCount} style="${replyStyle}"`,
     );
 
     const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
