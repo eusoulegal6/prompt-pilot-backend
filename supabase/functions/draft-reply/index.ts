@@ -22,6 +22,22 @@ const LIMITS = {
   providerLabel: 100,
 };
 
+// Media understanding limits
+const MEDIA_LIMITS = {
+  maxItems: 6,
+  maxBytesPerItem: 8 * 1024 * 1024, // 8 MB
+  maxTotalBytes: 20 * 1024 * 1024,  // 20 MB combined
+  perItemTimeoutMs: 20_000,
+  annotationMaxLen: 1500,
+};
+const ALLOWED_IMAGE_MIME = new Set([
+  "image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif",
+]);
+const ALLOWED_AUDIO_MIME = new Set([
+  "audio/ogg", "audio/oga", "audio/mpeg", "audio/mp3", "audio/mp4",
+  "audio/m4a", "audio/x-m4a", "audio/wav", "audio/webm", "audio/aac", "audio/flac",
+]);
+
 const QUOTA_EMAILS_PER_MONTH = 500;
 const QUOTA_INPUT_TOKENS_PER_MONTH = 2_000_000;
 const QUOTA_OUTPUT_TOKENS_PER_MONTH = 500_000;
