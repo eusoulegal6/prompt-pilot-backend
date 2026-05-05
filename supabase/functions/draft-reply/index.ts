@@ -182,6 +182,202 @@ function currentPeriod(): string {
   return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
+// ------- Media understanding ----------
+
+type MediaInput = {
+  key?: string;
+  dataId?: string;
+  kind: "image" | "audio";
+  from?: string;
+  direction?: string;
+  text?: string;
+  caption?: string;
+  mediaLabel?: string;
+  fileName?: string;
+  durationSec?: number;
+  mimeType: string;
+  dataUrl: string;
+  byteLength?: number;
+};
+
+type MediaAnnotation = {
+  key?: string;
+  dataId?: string;
+  text?: string;
+  annotation: string;
+};
+
+function parseDataUrl(dataUrl: string): { mime: string; base64: string } | null {
+  const m = /^data:([^;,]+)(?:;[^,]*)?,(.+)$/i.exec(dataUrl ?? "");
+  if (!m) return null;
+  const mime = m[1].toLowerCase();
+  const payload = m[2];
+  // We expect base64; if no ;base64 marker, bail (URL-encoded media is not supported).
+  if (!/;base64,/i.test(dataUrl)) return null;
+  return { mime, base64: payload };
+}
+
+function sanitizeMediaInputs(raw: unknown): MediaInput[] {
+  if (!Array.isArray(raw)) return [];
+  const out: MediaInput[] = [];
+  let totalBytes = 0;
+  for (const item of raw) {
+    if (out.length >= MEDIA_LIMITS.maxItems) break;
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    const kind = String(o.kind ?? "").toLowerCase();
+    if (kind !== "image" && kind !== "audio") continue;
+    const mimeType = String(o.mimeType ?? "").toLowerCase();
+    const dataUrl = typeof o.dataUrl === "string" ? o.dataUrl : "";
+    if (!dataUrl) continue;
+    if (kind === "image" && !ALLOWED_IMAGE_MIME.has(mimeType)) continue;
+    if (kind === "audio" && !ALLOWED_AUDIO_MIME.has(mimeType)) continue;
+
+    const parsed = parseDataUrl(dataUrl);
+    if (!parsed) continue;
+    // Approximate decoded size from base64 length.
+    const approxBytes = Math.floor((parsed.base64.length * 3) / 4);
+    if (approxBytes > MEDIA_LIMITS.maxBytesPerItem) continue;
+    if (totalBytes + approxBytes > MEDIA_LIMITS.maxTotalBytes) break;
+    totalBytes += approxBytes;
+
+    out.push({
+      key: typeof o.key === "string" ? o.key.slice(0, 200) : undefined,
+      dataId: typeof o.dataId === "string" ? o.dataId.slice(0, 200) : undefined,
+      kind: kind as "image" | "audio",
+      from: typeof o.from === "string" ? o.from.slice(0, 200) : undefined,
+      direction: typeof o.direction === "string" ? o.direction.slice(0, 32) : undefined,
+      text: typeof o.text === "string" ? o.text.slice(0, 500) : undefined,
+      caption: typeof o.caption === "string" ? o.caption.slice(0, 500) : undefined,
+      mediaLabel: typeof o.mediaLabel === "string" ? o.mediaLabel.slice(0, 200) : undefined,
+      fileName: typeof o.fileName === "string" ? o.fileName.slice(0, 200) : undefined,
+      durationSec: typeof o.durationSec === "number" ? o.durationSec : undefined,
+      mimeType,
+      dataUrl,
+    });
+  }
+  return out;
+}
+
+async function understandMediaItem(
+  item: MediaInput,
+  apiKey: string,
+): Promise<string | null> {
+  const parsed = parseDataUrl(item.dataUrl);
+  if (!parsed) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), MEDIA_LIMITS.perItemTimeoutMs);
+  try {
+    const instruction = item.kind === "image"
+      ? "Describe this image factually in 1-3 short sentences. If there is readable text (a receipt, screenshot, sign, document, etc.), transcribe the important text verbatim under an 'OCR:' line. Do not speculate about people. No preamble."
+      : "Transcribe this audio verbatim in the original language. If it is longer than a couple of sentences, also add a one-line summary prefixed with 'Summary:'. No preamble.";
+
+    const userContent: Array<Record<string, unknown>> = [{ type: "text", text: instruction }];
+    if (item.kind === "image") {
+      userContent.push({
+        type: "image_url",
+        image_url: { url: item.dataUrl },
+      });
+    } else {
+      // OpenAI-compatible audio input via Lovable AI Gateway (Gemini multimodal)
+      userContent.push({
+        type: "input_audio",
+        input_audio: { data: parsed.base64, format: parsed.mime.split("/")[1] || "ogg" },
+      });
+    }
+
+    const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          { role: "system", content: "You extract information from images and audio for a downstream reply-drafting assistant. Be concise and factual." },
+          { role: "user", content: userContent },
+        ],
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      console.warn(`media understanding failed kind=${item.kind} mime=${item.mimeType} status=${res.status}`);
+      return null;
+    }
+    const data = await res.json();
+    const text = data?.choices?.[0]?.message?.content;
+    if (typeof text !== "string" || !text.trim()) return null;
+    return truncate(text.trim(), MEDIA_LIMITS.annotationMaxLen);
+  } catch (e) {
+    console.warn(`media understanding error kind=${item.kind} mime=${item.mimeType}: ${(e as Error).message}`);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function buildMediaAnnotations(items: MediaInput[]): Promise<MediaAnnotation[]> {
+  if (items.length === 0) return [];
+  const apiKey = Deno.env.get("LOVABLE_API_KEY");
+  if (!apiKey) {
+    console.warn("LOVABLE_API_KEY missing; skipping media understanding");
+    return [];
+  }
+  const results = await Promise.all(items.map(async (item) => {
+    const label = item.kind === "image"
+      ? (item.mediaLabel || "Image")
+      : (item.mediaLabel || (item.durationSec ? `Voice message ${Math.floor(item.durationSec / 60)}:${String(item.durationSec % 60).padStart(2, "0")}` : "Voice message"));
+    const understood = await understandMediaItem(item, apiKey);
+    if (!understood) return null;
+    const header = item.kind === "image"
+      ? `[Image] ${label}`
+      : `[${label}]`;
+    const captionLine = item.caption ? `\nCaption: ${item.caption}` : "";
+    const body = item.kind === "image"
+      ? `Visual summary: ${understood}`
+      : `Transcript: ${understood}`;
+    const fromPrefix = item.from ? `${item.from}: ` : "";
+    const annotation = truncate(
+      `${fromPrefix}${header}${captionLine}\n${body}`,
+      MEDIA_LIMITS.annotationMaxLen,
+    );
+    return {
+      key: item.key,
+      dataId: item.dataId,
+      text: item.text,
+      annotation,
+    } as MediaAnnotation;
+  }));
+  return results.filter((r): r is MediaAnnotation => r !== null);
+}
+
+function mergeAnnotationsIntoThread(
+  thread: string[],
+  annotations: MediaAnnotation[],
+): { thread: string[]; leftover: MediaAnnotation[] } {
+  if (annotations.length === 0) return { thread, leftover: [] };
+  const used = new Set<number>();
+  const out = [...thread];
+  const leftover: MediaAnnotation[] = [];
+  for (const ann of annotations) {
+    let matched = -1;
+    if (ann.text) {
+      for (let i = 0; i < out.length; i++) {
+        if (used.has(i)) continue;
+        if (out[i].includes(ann.text)) { matched = i; break; }
+      }
+    }
+    if (matched >= 0) {
+      used.add(matched);
+      out[matched] = truncate(`${out[matched]}\n  ↳ ${ann.annotation.replace(/\n/g, "\n     ")}`, LIMITS.threadMessage + MEDIA_LIMITS.annotationMaxLen);
+    } else {
+      leftover.push(ann);
+    }
+  }
+  return { thread: out, leftover };
+}
+
 async function checkQuota(
   userId: string,
   period: string,
