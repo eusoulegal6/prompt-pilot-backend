@@ -261,48 +261,85 @@ function sanitizeMediaInputs(raw: unknown): MediaInput[] {
 
 async function understandMediaItem(
   item: MediaInput,
-  apiKey: string,
+  lovableApiKey: string,
+  anthropicApiKey: string | null,
 ): Promise<string | null> {
   const parsed = parseDataUrl(item.dataUrl);
   if (!parsed) return null;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), MEDIA_LIMITS.perItemTimeoutMs);
   try {
-    const instruction = item.kind === "image"
-      ? "Describe this image factually in 1-3 short sentences. If there is readable text (a receipt, screenshot, sign, document, etc.), transcribe the important text verbatim under an 'OCR:' line. Do not speculate about people. No preamble."
-      : "Transcribe this audio verbatim in the original language. If it is longer than a couple of sentences, also add a one-line summary prefixed with 'Summary:'. No preamble.";
-
-    const userContent: Array<Record<string, unknown>> = [{ type: "text", text: instruction }];
     if (item.kind === "image") {
-      userContent.push({
-        type: "image_url",
-        image_url: { url: item.dataUrl },
+      // Images go through Anthropic (Claude) for highest fidelity vision + OCR.
+      if (!anthropicApiKey) {
+        console.warn("ANTHROPIC_API_KEY missing; skipping image understanding");
+        return null;
+      }
+      const instruction = "Describe this image factually in 1-3 short sentences. If there is readable text (a receipt, screenshot, sign, document, etc.), transcribe the important text verbatim under an 'OCR:' line. Do not speculate about people. No preamble.";
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": anthropicApiKey,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 600,
+          system: "You extract information from images for a downstream reply-drafting assistant. Be concise and factual.",
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "image",
+                  source: { type: "base64", media_type: parsed.mime, data: parsed.base64 },
+                },
+                { type: "text", text: instruction },
+              ],
+            },
+          ],
+        }),
+        signal: controller.signal,
       });
-    } else {
-      // OpenAI-compatible audio input via Lovable AI Gateway (Gemini multimodal)
-      userContent.push({
-        type: "input_audio",
-        input_audio: { data: parsed.base64, format: parsed.mime.split("/")[1] || "ogg" },
-      });
+      if (!res.ok) {
+        console.warn(`anthropic image understanding failed mime=${item.mimeType} status=${res.status}`);
+        return null;
+      }
+      const data = await res.json();
+      const text = data?.content?.[0]?.text;
+      if (typeof text !== "string" || !text.trim()) return null;
+      return truncate(text.trim(), MEDIA_LIMITS.annotationMaxLen);
     }
 
+    // Audio: Anthropic does not accept audio input, so transcribe via Lovable AI Gateway (Gemini multimodal).
+    const instruction = "Transcribe this audio verbatim in the original language. If it is longer than a couple of sentences, also add a one-line summary prefixed with 'Summary:'. No preamble.";
     const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${lovableApiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
         model: "google/gemini-2.5-flash",
         messages: [
-          { role: "system", content: "You extract information from images and audio for a downstream reply-drafting assistant. Be concise and factual." },
-          { role: "user", content: userContent },
+          { role: "system", content: "You transcribe audio for a downstream reply-drafting assistant. Be concise and factual." },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: instruction },
+              {
+                type: "input_audio",
+                input_audio: { data: parsed.base64, format: parsed.mime.split("/")[1] || "ogg" },
+              },
+            ],
+          },
         ],
       }),
       signal: controller.signal,
     });
     if (!res.ok) {
-      console.warn(`media understanding failed kind=${item.kind} mime=${item.mimeType} status=${res.status}`);
+      console.warn(`gemini audio understanding failed mime=${item.mimeType} status=${res.status}`);
       return null;
     }
     const data = await res.json();
@@ -319,16 +356,17 @@ async function understandMediaItem(
 
 async function buildMediaAnnotations(items: MediaInput[]): Promise<MediaAnnotation[]> {
   if (items.length === 0) return [];
-  const apiKey = Deno.env.get("LOVABLE_API_KEY");
-  if (!apiKey) {
-    console.warn("LOVABLE_API_KEY missing; skipping media understanding");
+  const lovableApiKey = Deno.env.get("LOVABLE_API_KEY") ?? "";
+  const anthropicApiKey = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
+  if (!lovableApiKey && !anthropicApiKey) {
+    console.warn("No media-understanding API keys configured; skipping");
     return [];
   }
   const results = await Promise.all(items.map(async (item) => {
     const label = item.kind === "image"
       ? (item.mediaLabel || "Image")
       : (item.mediaLabel || (item.durationSec ? `Voice message ${Math.floor(item.durationSec / 60)}:${String(item.durationSec % 60).padStart(2, "0")}` : "Voice message"));
-    const understood = await understandMediaItem(item, apiKey);
+    const understood = await understandMediaItem(item, lovableApiKey, anthropicApiKey || null);
     if (!understood) return null;
     const header = item.kind === "image"
       ? `[Image] ${label}`
