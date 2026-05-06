@@ -911,8 +911,26 @@ Draft the reply now.`;
       SUPABASE_SERVICE_ROLE_KEY,
     );
 
+    const mediaTranscripts = mediaAnnotationsAll
+      .filter((a) => a.kind === "audio" && a.understood)
+      .map((a) => ({
+        key: a.key,
+        dataId: a.dataId,
+        mediaLabel: a.mediaLabel,
+        mimeType: a.mimeType,
+        transcript: a.understood,
+      }));
+    const mediaAnnotationsOut = mediaAnnotationsAll.map((a) => ({
+      key: a.key,
+      dataId: a.dataId,
+      kind: a.kind,
+      mediaLabel: a.mediaLabel,
+      mimeType: a.mimeType,
+      annotation: a.annotation,
+    }));
+
     if (finalDecision === "reply") {
-      return jsonResponse({ decision: "reply", draft: finalDraft, model, inputTokens, outputTokens });
+      return jsonResponse({ decision: "reply", draft: finalDraft, model, inputTokens, outputTokens, mediaTranscripts, mediaAnnotations: mediaAnnotationsOut });
     }
     return jsonResponse({
       decision: finalDecision,
@@ -921,6 +939,8 @@ Draft the reply now.`;
       model,
       inputTokens,
       outputTokens,
+      mediaTranscripts,
+      mediaAnnotations: mediaAnnotationsOut,
     });
   } catch (err) {
     clearTimeout(timeout);
