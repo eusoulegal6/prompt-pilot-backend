@@ -353,7 +353,8 @@ async function buildMediaAnnotations(items: MediaInput[]): Promise<MediaAnnotati
   if (items.length === 0) return [];
   const lovableApiKey = Deno.env.get("LOVABLE_API_KEY") ?? "";
   const anthropicApiKey = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
-  if (!lovableApiKey && !anthropicApiKey) {
+  const openaiApiKey = Deno.env.get("OPENAI_API_KEY") ?? "";
+  if (!anthropicApiKey && !openaiApiKey) {
     console.warn("No media-understanding API keys configured; skipping");
     return [];
   }
