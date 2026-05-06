@@ -724,10 +724,12 @@ serve(async (req) => {
   let augmentedThread = threadMessages;
   let augmentedLatest = latestMessage;
   let mediaAnnotationsCount = 0;
+  let mediaAnnotationsAll: MediaAnnotation[] = [];
   if (mediaInputs.length > 0) {
     try {
       const annotations = await buildMediaAnnotations(mediaInputs, { userId, provider });
       mediaAnnotationsCount = annotations.length;
+      mediaAnnotationsAll = annotations;
       if (annotations.length > 0) {
         const merged = mergeAnnotationsIntoThread(threadMessages, annotations);
         augmentedThread = merged.thread;
