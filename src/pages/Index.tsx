@@ -1,5 +1,6 @@
 import { useAuthReady } from "@/hooks/useAuthReady";
 import { Navigate } from "react-router-dom";
+import WhisperActivity from "@/components/WhisperActivity";
 
 const Index = () => {
   const { user, isReady } = useAuthReady();
@@ -17,13 +18,18 @@ const Index = () => {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background">
-      <div className="text-center space-y-4 max-w-md px-4">
-        <h1 className="text-3xl font-bold text-foreground">WhatsReply</h1>
-        <p className="text-muted-foreground">
-          AI-powered chat reply drafting for Whatsapp. Sign up or log in to get started.
-        </p>
-        <p className="text-sm text-muted-foreground">Check your email for a confirmation link after signing up.</p>
+    <div className="min-h-screen bg-background p-8">
+      <div className="max-w-2xl mx-auto space-y-6">
+        <div className="text-center space-y-4">
+          <h1 className="text-3xl font-bold text-foreground">WhatsReply</h1>
+          <p className="text-muted-foreground">
+            AI-powered chat reply drafting for Whatsapp. Sign up or log in to get started.
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Check your email for a confirmation link after signing up.
+          </p>
+        </div>
+        <WhisperActivity />
       </div>
     </div>
   );
