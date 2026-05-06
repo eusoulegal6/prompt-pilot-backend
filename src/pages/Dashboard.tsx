@@ -3,6 +3,7 @@ import { useAuthReady } from "@/hooks/useAuthReady";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import ConnectExtension from "@/components/ConnectExtension";
+import WhisperActivity from "@/components/WhisperActivity";
 
 const Dashboard = () => {
   const { user } = useAuthReady();
@@ -57,6 +58,7 @@ const Dashboard = () => {
           </p>
         </div>
         <ConnectExtension />
+        <WhisperActivity />
       </div>
     </div>
   );

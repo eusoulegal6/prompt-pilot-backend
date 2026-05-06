@@ -38,6 +38,43 @@ const ALLOWED_AUDIO_MIME = new Set([
   "audio/m4a", "audio/x-m4a", "audio/wav", "audio/webm", "audio/aac", "audio/flac",
 ]);
 
+function logWhisperInvocation(row: {
+  userId?: string;
+  provider?: string;
+  mimeType?: string;
+  status: "success" | "error" | "empty";
+  chars?: number;
+  durationMs?: number;
+  error?: string;
+}) {
+  // Fire-and-forget insert; do not log audio content or transcripts.
+  try {
+    const url = Deno.env.get("SUPABASE_URL");
+    const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    if (!url || !key) return;
+    fetch(`${url}/rest/v1/whisper_invocations`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+        Prefer: "return=minimal",
+      },
+      body: JSON.stringify({
+        user_id: row.userId ?? null,
+        provider: row.provider ?? null,
+        mime_type: row.mimeType ?? null,
+        status: row.status,
+        chars: row.chars ?? null,
+        duration_ms: row.durationMs ?? null,
+        error: row.error ?? null,
+      }),
+    }).catch(() => {});
+  } catch {
+    // ignore
+  }
+}
+
 const QUOTA_EMAILS_PER_MONTH = 500;
 const QUOTA_INPUT_TOKENS_PER_MONTH = 2_000_000;
 const QUOTA_OUTPUT_TOKENS_PER_MONTH = 500_000;
@@ -263,6 +300,7 @@ async function understandMediaItem(
   item: MediaInput,
   lovableApiKey: string,
   anthropicApiKey: string | null,
+  ctx?: { userId?: string; provider?: string },
 ): Promise<string | null> {
   const parsed = parseDataUrl(item.dataUrl);
   if (!parsed) return null;
@@ -318,6 +356,7 @@ async function understandMediaItem(
       console.warn("OPENAI_API_KEY missing; skipping audio transcription");
       return null;
     }
+    const whisperStart = Date.now();
     // Decode base64 to bytes
     const binary = atob(parsed.base64);
     const bytes = new Uint8Array(binary.length);
@@ -335,12 +374,37 @@ async function understandMediaItem(
     });
     if (!res.ok) {
       console.warn(`whisper audio transcription failed mime=${item.mimeType} status=${res.status}`);
+      logWhisperInvocation({
+        userId: ctx?.userId,
+        provider: ctx?.provider,
+        mimeType: item.mimeType,
+        status: "error",
+        durationMs: Date.now() - whisperStart,
+        error: `http_${res.status}`,
+      });
       return null;
     }
     const data = await res.json();
     const text = data?.text;
-    if (typeof text !== "string" || !text.trim()) return null;
+    if (typeof text !== "string" || !text.trim()) {
+      logWhisperInvocation({
+        userId: ctx?.userId,
+        provider: ctx?.provider,
+        mimeType: item.mimeType,
+        status: "empty",
+        durationMs: Date.now() - whisperStart,
+      });
+      return null;
+    }
     console.info(`whisper audio transcription succeeded mime=${item.mimeType} chars=${text.trim().length}`);
+    logWhisperInvocation({
+      userId: ctx?.userId,
+      provider: ctx?.provider,
+      mimeType: item.mimeType,
+      status: "success",
+      chars: text.trim().length,
+      durationMs: Date.now() - whisperStart,
+    });
     return truncate(text.trim(), MEDIA_LIMITS.annotationMaxLen);
   } catch (e) {
     console.warn(`media understanding error kind=${item.kind} mime=${item.mimeType}: ${(e as Error).message}`);
@@ -350,7 +414,10 @@ async function understandMediaItem(
   }
 }
 
-async function buildMediaAnnotations(items: MediaInput[]): Promise<MediaAnnotation[]> {
+async function buildMediaAnnotations(
+  items: MediaInput[],
+  ctx?: { userId?: string; provider?: string },
+): Promise<MediaAnnotation[]> {
   if (items.length === 0) return [];
   const lovableApiKey = Deno.env.get("LOVABLE_API_KEY") ?? "";
   const anthropicApiKey = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
@@ -363,7 +430,7 @@ async function buildMediaAnnotations(items: MediaInput[]): Promise<MediaAnnotati
     const label = item.kind === "image"
       ? (item.mediaLabel || "Image")
       : (item.mediaLabel || (item.durationSec ? `Voice message ${Math.floor(item.durationSec / 60)}:${String(item.durationSec % 60).padStart(2, "0")}` : "Voice message"));
-    const understood = await understandMediaItem(item, lovableApiKey, anthropicApiKey || null);
+    const understood = await understandMediaItem(item, lovableApiKey, anthropicApiKey || null, ctx);
     if (!understood) return null;
     const header = item.kind === "image"
       ? `[Image] ${label}`
@@ -648,7 +715,7 @@ serve(async (req) => {
   let mediaAnnotationsCount = 0;
   if (mediaInputs.length > 0) {
     try {
-      const annotations = await buildMediaAnnotations(mediaInputs);
+      const annotations = await buildMediaAnnotations(mediaInputs, { userId, provider });
       mediaAnnotationsCount = annotations.length;
       if (annotations.length > 0) {
         const merged = mergeAnnotationsIntoThread(threadMessages, annotations);
