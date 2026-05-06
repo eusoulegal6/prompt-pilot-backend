@@ -377,7 +377,10 @@ async function understandMediaItem(
   }
 }
 
-async function buildMediaAnnotations(items: MediaInput[]): Promise<MediaAnnotation[]> {
+async function buildMediaAnnotations(
+  items: MediaInput[],
+  ctx?: { userId?: string; provider?: string },
+): Promise<MediaAnnotation[]> {
   if (items.length === 0) return [];
   const lovableApiKey = Deno.env.get("LOVABLE_API_KEY") ?? "";
   const anthropicApiKey = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
@@ -390,7 +393,7 @@ async function buildMediaAnnotations(items: MediaInput[]): Promise<MediaAnnotati
     const label = item.kind === "image"
       ? (item.mediaLabel || "Image")
       : (item.mediaLabel || (item.durationSec ? `Voice message ${Math.floor(item.durationSec / 60)}:${String(item.durationSec % 60).padStart(2, "0")}` : "Voice message"));
-    const understood = await understandMediaItem(item, lovableApiKey, anthropicApiKey || null);
+    const understood = await understandMediaItem(item, lovableApiKey, anthropicApiKey || null, ctx);
     if (!understood) return null;
     const header = item.kind === "image"
       ? `[Image] ${label}`
