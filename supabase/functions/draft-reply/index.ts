@@ -312,38 +312,33 @@ async function understandMediaItem(
       return truncate(text.trim(), MEDIA_LIMITS.annotationMaxLen);
     }
 
-    // Audio: Anthropic does not accept audio input, so transcribe via Lovable AI Gateway (Gemini multimodal).
-    const instruction = "Transcribe this audio verbatim in the original language. If it is longer than a couple of sentences, also add a one-line summary prefixed with 'Summary:'. No preamble.";
-    const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    // Audio: transcribe via OpenAI Whisper.
+    const openaiApiKey = Deno.env.get("OPENAI_API_KEY") ?? "";
+    if (!openaiApiKey) {
+      console.warn("OPENAI_API_KEY missing; skipping audio transcription");
+      return null;
+    }
+    // Decode base64 to bytes
+    const binary = atob(parsed.base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const ext = (parsed.mime.split("/")[1] || "ogg").split(";")[0];
+    const filename = `audio.${ext === "mpeg" ? "mp3" : ext}`;
+    const form = new FormData();
+    form.append("file", new Blob([bytes], { type: parsed.mime }), filename);
+    form.append("model", "whisper-1");
+    const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${lovableApiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: "You transcribe audio for a downstream reply-drafting assistant. Be concise and factual." },
-          {
-            role: "user",
-            content: [
-              { type: "text", text: instruction },
-              {
-                type: "input_audio",
-                input_audio: { data: parsed.base64, format: parsed.mime.split("/")[1] || "ogg" },
-              },
-            ],
-          },
-        ],
-      }),
+      headers: { Authorization: `Bearer ${openaiApiKey}` },
+      body: form,
       signal: controller.signal,
     });
     if (!res.ok) {
-      console.warn(`gemini audio understanding failed mime=${item.mimeType} status=${res.status}`);
+      console.warn(`whisper audio transcription failed mime=${item.mimeType} status=${res.status}`);
       return null;
     }
     const data = await res.json();
-    const text = data?.choices?.[0]?.message?.content;
+    const text = data?.text;
     if (typeof text !== "string" || !text.trim()) return null;
     return truncate(text.trim(), MEDIA_LIMITS.annotationMaxLen);
   } catch (e) {
