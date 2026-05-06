@@ -77,45 +77,6 @@ export type Database = {
         }
         Relationships: []
       }
-      appointments: {
-        Row: {
-          booked_at: string
-          created_at: string
-          date: string
-          id: string
-          name: string
-          phone: string
-          service: string
-          thread_id: string
-          time: string
-          user_id: string
-        }
-        Insert: {
-          booked_at?: string
-          created_at?: string
-          date: string
-          id?: string
-          name: string
-          phone: string
-          service: string
-          thread_id?: string
-          time: string
-          user_id: string
-        }
-        Update: {
-          booked_at?: string
-          created_at?: string
-          date?: string
-          id?: string
-          name?: string
-          phone?: string
-          service?: string
-          thread_id?: string
-          time?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
       extension_pair_codes: {
         Row: {
           code: string
