@@ -456,6 +456,10 @@ async function buildMediaAnnotations(
       dataId: item.dataId,
       text: item.text,
       annotation,
+      kind: item.kind,
+      understood,
+      mediaLabel: label,
+      mimeType: item.mimeType,
     } as MediaAnnotation;
   }));
   return results.filter((r): r is MediaAnnotation => r !== null);
