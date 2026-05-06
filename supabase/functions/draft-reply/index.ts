@@ -38,6 +38,43 @@ const ALLOWED_AUDIO_MIME = new Set([
   "audio/m4a", "audio/x-m4a", "audio/wav", "audio/webm", "audio/aac", "audio/flac",
 ]);
 
+function logWhisperInvocation(row: {
+  userId?: string;
+  provider?: string;
+  mimeType?: string;
+  status: "success" | "error" | "empty";
+  chars?: number;
+  durationMs?: number;
+  error?: string;
+}) {
+  // Fire-and-forget insert; do not log audio content or transcripts.
+  try {
+    const url = Deno.env.get("SUPABASE_URL");
+    const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    if (!url || !key) return;
+    fetch(`${url}/rest/v1/whisper_invocations`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+        Prefer: "return=minimal",
+      },
+      body: JSON.stringify({
+        user_id: row.userId ?? null,
+        provider: row.provider ?? null,
+        mime_type: row.mimeType ?? null,
+        status: row.status,
+        chars: row.chars ?? null,
+        duration_ms: row.durationMs ?? null,
+        error: row.error ?? null,
+      }),
+    }).catch(() => {});
+  } catch {
+    // ignore
+  }
+}
+
 const QUOTA_EMAILS_PER_MONTH = 500;
 const QUOTA_INPUT_TOKENS_PER_MONTH = 2_000_000;
 const QUOTA_OUTPUT_TOKENS_PER_MONTH = 500_000;
