@@ -340,6 +340,7 @@ async function understandMediaItem(
     const data = await res.json();
     const text = data?.text;
     if (typeof text !== "string" || !text.trim()) return null;
+    console.info(`whisper audio transcription succeeded mime=${item.mimeType} chars=${text.trim().length}`);
     return truncate(text.trim(), MEDIA_LIMITS.annotationMaxLen);
   } catch (e) {
     console.warn(`media understanding error kind=${item.kind} mime=${item.mimeType}: ${(e as Error).message}`);
