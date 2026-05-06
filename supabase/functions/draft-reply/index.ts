@@ -678,7 +678,7 @@ serve(async (req) => {
   let mediaAnnotationsCount = 0;
   if (mediaInputs.length > 0) {
     try {
-      const annotations = await buildMediaAnnotations(mediaInputs);
+      const annotations = await buildMediaAnnotations(mediaInputs, { userId, provider });
       mediaAnnotationsCount = annotations.length;
       if (annotations.length > 0) {
         const merged = mergeAnnotationsIntoThread(threadMessages, annotations);
