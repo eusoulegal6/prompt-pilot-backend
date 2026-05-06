@@ -1,0 +1,1 @@
+ALTER TABLE public.whisper_invocations ADD COLUMN IF NOT EXISTS transcript text;

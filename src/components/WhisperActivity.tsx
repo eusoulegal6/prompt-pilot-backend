@@ -10,6 +10,7 @@ type Row = {
   chars: number | null;
   duration_ms: number | null;
   error: string | null;
+  transcript: string | null;
   created_at: string;
 };
 
@@ -66,24 +67,31 @@ const WhisperActivity = () => {
             return (
               <li
                 key={r.id}
-                className="flex items-center gap-3 rounded-md border border-border px-3 py-2 text-sm"
+                className="rounded-md border border-border px-3 py-2 text-sm"
               >
-                {ok ? (
-                  <CheckCircle2 className="h-4 w-4 text-primary shrink-0" />
-                ) : (
-                  <AlertTriangle className="h-4 w-4 text-destructive shrink-0" />
-                )}
-                <span className="font-mono text-xs text-muted-foreground">
-                  {new Date(r.created_at).toLocaleTimeString()}
-                </span>
-                <span className="text-card-foreground">
-                  {r.provider ?? "?"} · {r.mime_type ?? "?"}
-                </span>
-                <span className="ml-auto text-xs text-muted-foreground">
-                  {ok
-                    ? `${r.chars ?? 0} chars · ${r.duration_ms ?? 0}ms`
-                    : r.error ?? r.status}
-                </span>
+                <div className="flex items-center gap-3">
+                  {ok ? (
+                    <CheckCircle2 className="h-4 w-4 text-primary shrink-0" />
+                  ) : (
+                    <AlertTriangle className="h-4 w-4 text-destructive shrink-0" />
+                  )}
+                  <span className="font-mono text-xs text-muted-foreground">
+                    {new Date(r.created_at).toLocaleTimeString()}
+                  </span>
+                  <span className="text-card-foreground">
+                    {r.provider ?? "?"} · {r.mime_type ?? "?"}
+                  </span>
+                  <span className="ml-auto text-xs text-muted-foreground">
+                    {ok
+                      ? `${r.chars ?? 0} chars · ${r.duration_ms ?? 0}ms`
+                      : r.error ?? r.status}
+                  </span>
+                </div>
+                {ok && r.transcript ? (
+                  <p className="mt-2 whitespace-pre-wrap text-card-foreground/90 text-sm border-l-2 border-primary pl-3">
+                    {r.transcript}
+                  </p>
+                ) : null}
               </li>
             );
           })}
