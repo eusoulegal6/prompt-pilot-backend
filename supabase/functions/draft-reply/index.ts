@@ -260,6 +260,11 @@ function sanitizeMediaInputs(raw: unknown): MediaInput[] {
 }
 
 async function understandMediaItem(
+  // see logWhisperInvocation below
+  // deno-lint-ignore no-explicit-any
+  ...args: any[]
+): Promise<string | null>;
+async function understandMediaItem(
   item: MediaInput,
   lovableApiKey: string,
   anthropicApiKey: string | null,
