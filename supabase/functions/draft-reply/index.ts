@@ -244,6 +244,10 @@ type MediaAnnotation = {
   dataId?: string;
   text?: string;
   annotation: string;
+  kind?: "image" | "audio";
+  understood?: string;
+  mediaLabel?: string;
+  mimeType?: string;
 };
 
 function parseDataUrl(dataUrl: string): { mime: string; base64: string } | null {
