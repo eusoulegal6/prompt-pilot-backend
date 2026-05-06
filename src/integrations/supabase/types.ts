@@ -454,6 +454,42 @@ export type Database = {
         }
         Relationships: []
       }
+      whisper_invocations: {
+        Row: {
+          chars: number | null
+          created_at: string
+          duration_ms: number | null
+          error: string | null
+          id: string
+          mime_type: string | null
+          provider: string | null
+          status: string
+          user_id: string | null
+        }
+        Insert: {
+          chars?: number | null
+          created_at?: string
+          duration_ms?: number | null
+          error?: string | null
+          id?: string
+          mime_type?: string | null
+          provider?: string | null
+          status: string
+          user_id?: string | null
+        }
+        Update: {
+          chars?: number | null
+          created_at?: string
+          duration_ms?: number | null
+          error?: string | null
+          id?: string
+          mime_type?: string | null
+          provider?: string | null
+          status?: string
+          user_id?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
