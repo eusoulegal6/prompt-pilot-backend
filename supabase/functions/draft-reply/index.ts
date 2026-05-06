@@ -46,6 +46,7 @@ function logWhisperInvocation(row: {
   chars?: number;
   durationMs?: number;
   error?: string;
+  transcript?: string;
 }) {
   // Fire-and-forget insert; do not log audio content or transcripts.
   try {
@@ -68,6 +69,7 @@ function logWhisperInvocation(row: {
         chars: row.chars ?? null,
         duration_ms: row.durationMs ?? null,
         error: row.error ?? null,
+        transcript: row.transcript ?? null,
       }),
     }).catch(() => {});
   } catch {
