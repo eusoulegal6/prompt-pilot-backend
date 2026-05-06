@@ -406,6 +406,7 @@ async function understandMediaItem(
       status: "success",
       chars: text.trim().length,
       durationMs: Date.now() - whisperStart,
+      transcript: text.trim(),
     });
     return truncate(text.trim(), MEDIA_LIMITS.annotationMaxLen);
   } catch (e) {
