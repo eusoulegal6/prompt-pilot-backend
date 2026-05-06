@@ -244,6 +244,10 @@ type MediaAnnotation = {
   dataId?: string;
   text?: string;
   annotation: string;
+  kind?: "image" | "audio";
+  understood?: string;
+  mediaLabel?: string;
+  mimeType?: string;
 };
 
 function parseDataUrl(dataUrl: string): { mime: string; base64: string } | null {
@@ -452,6 +456,10 @@ async function buildMediaAnnotations(
       dataId: item.dataId,
       text: item.text,
       annotation,
+      kind: item.kind,
+      understood,
+      mediaLabel: label,
+      mimeType: item.mimeType,
     } as MediaAnnotation;
   }));
   return results.filter((r): r is MediaAnnotation => r !== null);
@@ -716,10 +724,12 @@ serve(async (req) => {
   let augmentedThread = threadMessages;
   let augmentedLatest = latestMessage;
   let mediaAnnotationsCount = 0;
+  let mediaAnnotationsAll: MediaAnnotation[] = [];
   if (mediaInputs.length > 0) {
     try {
       const annotations = await buildMediaAnnotations(mediaInputs, { userId, provider });
       mediaAnnotationsCount = annotations.length;
+      mediaAnnotationsAll = annotations;
       if (annotations.length > 0) {
         const merged = mergeAnnotationsIntoThread(threadMessages, annotations);
         augmentedThread = merged.thread;
@@ -901,8 +911,26 @@ Draft the reply now.`;
       SUPABASE_SERVICE_ROLE_KEY,
     );
 
+    const mediaTranscripts = mediaAnnotationsAll
+      .filter((a) => a.kind === "audio" && a.understood)
+      .map((a) => ({
+        key: a.key,
+        dataId: a.dataId,
+        mediaLabel: a.mediaLabel,
+        mimeType: a.mimeType,
+        transcript: a.understood,
+      }));
+    const mediaAnnotationsOut = mediaAnnotationsAll.map((a) => ({
+      key: a.key,
+      dataId: a.dataId,
+      kind: a.kind,
+      mediaLabel: a.mediaLabel,
+      mimeType: a.mimeType,
+      annotation: a.annotation,
+    }));
+
     if (finalDecision === "reply") {
-      return jsonResponse({ decision: "reply", draft: finalDraft, model, inputTokens, outputTokens });
+      return jsonResponse({ decision: "reply", draft: finalDraft, model, inputTokens, outputTokens, mediaTranscripts, mediaAnnotations: mediaAnnotationsOut });
     }
     return jsonResponse({
       decision: finalDecision,
@@ -911,6 +939,8 @@ Draft the reply now.`;
       model,
       inputTokens,
       outputTokens,
+      mediaTranscripts,
+      mediaAnnotations: mediaAnnotationsOut,
     });
   } catch (err) {
     clearTimeout(timeout);
