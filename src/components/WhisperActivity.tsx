@@ -43,6 +43,18 @@ const WhisperActivity = () => {
     };
   }, []);
 
+  const handleDelete = async (id: string) => {
+    const { error } = await supabase
+      .from("whisper_invocations")
+      .delete()
+      .eq("id", id);
+    if (error) {
+      console.error("Failed to delete whisper invocation:", error);
+      return;
+    }
+    setRows((prev) => prev.filter((r) => r.id !== id));
+  };
+
   return (
     <div className="rounded-lg border border-border bg-card p-6">
       <div className="flex items-center gap-2 mb-4">
