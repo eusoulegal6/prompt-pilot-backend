@@ -98,6 +98,14 @@ const WhisperActivity = () => {
                       ? `${r.chars ?? 0} chars · ${r.duration_ms ?? 0}ms`
                       : r.error ?? r.status}
                   </span>
+                  <button
+                    onClick={() => handleDelete(r.id)}
+                    className="shrink-0 rounded-md p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                    title="Delete"
+                    aria-label="Delete whisper activity"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
                 </div>
                 {ok && r.transcript ? (
                   <p className="mt-2 whitespace-pre-wrap text-card-foreground/90 text-sm border-l-2 border-primary pl-3">
