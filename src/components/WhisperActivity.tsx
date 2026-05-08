@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { Mic, CheckCircle2, AlertTriangle } from "lucide-react";
+import { Mic, CheckCircle2, AlertTriangle, Trash2 } from "lucide-react";
 
 type Row = {
   id: string;
