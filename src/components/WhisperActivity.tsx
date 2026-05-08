@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { Mic, CheckCircle2, AlertTriangle } from "lucide-react";
+import { Mic, CheckCircle2, AlertTriangle, Trash2 } from "lucide-react";
 
 type Row = {
   id: string;
@@ -42,6 +42,18 @@ const WhisperActivity = () => {
       supabase.removeChannel(channel);
     };
   }, []);
+
+  const handleDelete = async (id: string) => {
+    const { error } = await supabase
+      .from("whisper_invocations")
+      .delete()
+      .eq("id", id);
+    if (error) {
+      console.error("Failed to delete whisper invocation:", error);
+      return;
+    }
+    setRows((prev) => prev.filter((r) => r.id !== id));
+  };
 
   return (
     <div className="rounded-lg border border-border bg-card p-6">
@@ -86,6 +98,14 @@ const WhisperActivity = () => {
                       ? `${r.chars ?? 0} chars · ${r.duration_ms ?? 0}ms`
                       : r.error ?? r.status}
                   </span>
+                  <button
+                    onClick={() => handleDelete(r.id)}
+                    className="shrink-0 rounded-md p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                    title="Delete"
+                    aria-label="Delete whisper activity"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
                 </div>
                 {ok && r.transcript ? (
                   <p className="mt-2 whitespace-pre-wrap text-card-foreground/90 text-sm border-l-2 border-primary pl-3">

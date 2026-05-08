@@ -465,7 +465,7 @@ export type Database = {
           provider: string | null
           status: string
           transcript: string | null
-          user_id: string | null
+          user_id: string
         }
         Insert: {
           chars?: number | null
@@ -477,7 +477,7 @@ export type Database = {
           provider?: string | null
           status: string
           transcript?: string | null
-          user_id?: string | null
+          user_id: string
         }
         Update: {
           chars?: number | null
@@ -489,7 +489,7 @@ export type Database = {
           provider?: string | null
           status?: string
           transcript?: string | null
-          user_id?: string | null
+          user_id?: string
         }
         Relationships: []
       }
