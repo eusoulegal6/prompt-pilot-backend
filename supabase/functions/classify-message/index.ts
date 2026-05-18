@@ -19,7 +19,6 @@ const CATEGORIES = [
   "cancellation",
   "escalation",
   "menu_bot",
-  "broadcast_or_notification",
   "sensitive_request",
   "needs_human_judgment",
 ] as const;
