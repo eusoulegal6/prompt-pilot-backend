@@ -18,12 +18,10 @@ const CATEGORIES = [
   "payment",
   "cancellation",
   "escalation",
-  "automation",
   "menu_bot",
   "broadcast_or_notification",
   "sensitive_request",
   "needs_human_judgment",
-  "other",
 ] as const;
 type Category = typeof CATEGORIES[number];
 const CATEGORY_SET = new Set<string>(CATEGORIES);
@@ -100,17 +98,15 @@ Allowed categories (return the slug exactly as listed):
 - payment: invoices, receipts, payment links, refunds, payment confirmations.
 - cancellation: cancelling an appointment, order, subscription, or service.
 - escalation: explicitly asking for a human/manager/supervisor/agent.
-- automation: bot/system notifications FROM other systems — OTP codes, automated confirmations, delivery webhooks.
 - menu_bot: IVR-style numbered menus ("press 1 for…", "reply 2 to…").
 - broadcast_or_notification: marketing blasts, newsletters, mass notifications, promotional content.
 - sensitive_request: legal, medical, financial advice, threats, self-harm, harassment — anything requiring careful human handling.
-- needs_human_judgment: ambiguous, long, or multi-topic messages where a generic auto-reply would clearly be wrong.
-- other: anything that clearly does not fit the above.
+- needs_human_judgment: ambiguous, long, multi-topic, or anything that clearly does not fit the above.
 
 PRECEDENCE RULES (apply in order — first match wins):
 1. If the user explicitly asks for a human/manager/agent → escalation.
 2. If the content is legal/medical/financial advice, threats, self-harm, or harassment → sensitive_request.
-3. If the sender is clearly a system/bot (OTP, automated confirmation, marketing blast) → automation / broadcast_or_notification / menu_bot.
+3. If the sender is clearly a system/bot (OTP, automated confirmation, marketing blast) → broadcast_or_notification / menu_bot.
 4. If the user wants to cancel AND mentions payment/refund → cancellation.
 5. If the user is angry/dissatisfied AND also asks something else → complaint.
 6. If the message is just a salutation with no request → greeting (even if context has other topics).
@@ -119,7 +115,7 @@ PRECEDENCE RULES (apply in order — first match wins):
 
 IMPORTANT:
 - Classify the LATEST inbound message only. Prior context is background, not the subject.
-- Do not invent categories. If unsure between two, prefer the more specific one; if still unsure, use needs_human_judgment, not other.
+- Do not invent categories. If unsure between two, prefer the more specific one; if still unsure, use needs_human_judgment.
 
 EXAMPLES:
 Input: "Hi, can I book a haircut for Saturday at 3pm?"
@@ -130,9 +126,6 @@ Output: {"category":"escalation","confidence":0.97,"reason":"explicit request fo
 
 Input: "I want to cancel my order and get my money back"
 Output: {"category":"cancellation","confidence":0.9,"reason":"cancel + refund → cancellation per rule 4"}
-
-Input: "Your code is 482910. Do not share it."
-Output: {"category":"automation","confidence":0.98,"reason":"OTP from a system"}
 
 Input: "Hello 👋"
 Output: {"category":"greeting","confidence":0.95,"reason":"salutation only"}
@@ -201,7 +194,7 @@ function parseClassification(text: string): { category: Category; confidence: nu
     // ignore
   }
   const rawCat = typeof parsed.category === "string" ? parsed.category.trim().toLowerCase() : "";
-  const category: Category = CATEGORY_SET.has(rawCat) ? rawCat as Category : "other";
+  const category: Category = CATEGORY_SET.has(rawCat) ? rawCat as Category : "needs_human_judgment";
   let confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
   if (!Number.isFinite(confidence)) confidence = 0;
   if (confidence < 0) confidence = 0;
