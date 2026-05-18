@@ -18,12 +18,10 @@ const CATEGORIES = [
   "payment",
   "cancellation",
   "escalation",
-  "automation",
   "menu_bot",
   "broadcast_or_notification",
   "sensitive_request",
   "needs_human_judgment",
-  "other",
 ] as const;
 type Category = typeof CATEGORIES[number];
 const CATEGORY_SET = new Set<string>(CATEGORIES);
