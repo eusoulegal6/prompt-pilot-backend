@@ -19,7 +19,6 @@ const CATEGORIES = [
   "cancellation",
   "escalation",
   "menu_bot",
-  "broadcast_or_notification",
   "sensitive_request",
   "needs_human_judgment",
 ] as const;
@@ -99,14 +98,13 @@ Allowed categories (return the slug exactly as listed):
 - cancellation: cancelling an appointment, order, subscription, or service.
 - escalation: explicitly asking for a human/manager/supervisor/agent.
 - menu_bot: IVR-style numbered menus ("press 1 for…", "reply 2 to…").
-- broadcast_or_notification: marketing blasts, newsletters, mass notifications, promotional content.
 - sensitive_request: legal, medical, financial advice, threats, self-harm, harassment — anything requiring careful human handling.
 - needs_human_judgment: ambiguous, long, multi-topic, or anything that clearly does not fit the above.
 
 PRECEDENCE RULES (apply in order — first match wins):
 1. If the user explicitly asks for a human/manager/agent → escalation.
 2. If the content is legal/medical/financial advice, threats, self-harm, or harassment → sensitive_request.
-3. If the sender is clearly a system/bot (OTP, automated confirmation, marketing blast) → broadcast_or_notification / menu_bot.
+3. If the sender is clearly a system/bot (OTP, automated confirmation, marketing blast) → menu_bot.
 4. If the user wants to cancel AND mentions payment/refund → cancellation.
 5. If the user is angry/dissatisfied AND also asks something else → complaint.
 6. If the message is just a salutation with no request → greeting (even if context has other topics).
