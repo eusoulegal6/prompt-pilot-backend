@@ -98,7 +98,6 @@ Allowed categories (return the slug exactly as listed):
 - cancellation: cancelling an appointment, order, subscription, or service.
 - escalation: explicitly asking for a human/manager/supervisor/agent.
 - menu_bot: IVR-style numbered menus ("press 1 for…", "reply 2 to…").
-- broadcast_or_notification: marketing blasts, newsletters, mass notifications, promotional content.
 - sensitive_request: legal, medical, financial advice, threats, self-harm, harassment — anything requiring careful human handling.
 - needs_human_judgment: ambiguous, long, multi-topic, or anything that clearly does not fit the above.
 
