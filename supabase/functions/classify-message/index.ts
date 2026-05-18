@@ -127,9 +127,6 @@ Output: {"category":"escalation","confidence":0.97,"reason":"explicit request fo
 Input: "I want to cancel my order and get my money back"
 Output: {"category":"cancellation","confidence":0.9,"reason":"cancel + refund → cancellation per rule 4"}
 
-Input: "Your code is 482910. Do not share it."
-Output: {"category":"automation","confidence":0.98,"reason":"OTP from a system"}
-
 Input: "Hello 👋"
 Output: {"category":"greeting","confidence":0.95,"reason":"salutation only"}
 
