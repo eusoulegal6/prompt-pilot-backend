@@ -88,24 +88,60 @@ async function resolveUserId(req: Request, supabaseUrl: string, serviceRoleKey: 
   return extractUserIdFromJwt(token);
 }
 
-const SYSTEM_PROMPT = `You classify a single inbound customer message into exactly ONE category.
+const SYSTEM_PROMPT = `You classify the LATEST inbound customer message into exactly ONE category.
 
 Allowed categories (return the slug exactly as listed):
-- appointment: booking, scheduling, rescheduling an appointment/visit/meeting.
+- appointment: booking, scheduling, rescheduling, confirming an appointment/visit/meeting.
 - greeting: hi/hello/good morning with no actual request yet.
-- pricing: asking about price, quote, cost, discount, packages.
+- pricing: asking about price, quote, cost, discount, packages, "how much".
 - complaint: expressing dissatisfaction, anger, or a problem with the service/product.
-- support: technical or operational help, "how do I…", troubleshooting.
-- order: placing/checking/modifying a product or service order.
+- support: technical or operational help, "how do I…", troubleshooting, account access.
+- order: placing/checking/modifying a product or service order, delivery status.
 - payment: invoices, receipts, payment links, refunds, payment confirmations.
 - cancellation: cancelling an appointment, order, subscription, or service.
-- escalation: explicitly asking for a human/manager/supervisor.
-- automation: bot/system notifications, OTP codes, automated confirmations FROM other systems.
+- escalation: explicitly asking for a human/manager/supervisor/agent.
+- automation: bot/system notifications FROM other systems — OTP codes, automated confirmations, delivery webhooks.
 - menu_bot: IVR-style numbered menus ("press 1 for…", "reply 2 to…").
-- broadcast_or_notification: marketing blasts, newsletters, mass notifications.
-- sensitive_request: legal, medical, financial advice, threats, self-harm, harassment, anything requiring careful human handling.
-- needs_human_judgment: ambiguous/long/multi-topic messages where a generic auto-reply would be wrong.
+- broadcast_or_notification: marketing blasts, newsletters, mass notifications, promotional content.
+- sensitive_request: legal, medical, financial advice, threats, self-harm, harassment — anything requiring careful human handling.
+- needs_human_judgment: ambiguous, long, or multi-topic messages where a generic auto-reply would clearly be wrong.
 - other: anything that clearly does not fit the above.
+
+PRECEDENCE RULES (apply in order — first match wins):
+1. If the user explicitly asks for a human/manager/agent → escalation.
+2. If the content is legal/medical/financial advice, threats, self-harm, or harassment → sensitive_request.
+3. If the sender is clearly a system/bot (OTP, automated confirmation, marketing blast) → automation / broadcast_or_notification / menu_bot.
+4. If the user wants to cancel AND mentions payment/refund → cancellation.
+5. If the user is angry/dissatisfied AND also asks something else → complaint.
+6. If the message is just a salutation with no request → greeting (even if context has other topics).
+7. If the message covers 3+ distinct asks or is genuinely ambiguous → needs_human_judgment.
+8. Otherwise pick the single best topical category (appointment, pricing, support, order, payment).
+
+IMPORTANT:
+- Classify the LATEST inbound message only. Prior context is background, not the subject.
+- Do not invent categories. If unsure between two, prefer the more specific one; if still unsure, use needs_human_judgment, not other.
+
+EXAMPLES:
+Input: "Hi, can I book a haircut for Saturday at 3pm?"
+Output: {"category":"appointment","confidence":0.95,"reason":"booking request with time"}
+
+Input: "this is the third time I'm writing, can I please speak to a manager"
+Output: {"category":"escalation","confidence":0.97,"reason":"explicit request for manager"}
+
+Input: "I want to cancel my order and get my money back"
+Output: {"category":"cancellation","confidence":0.9,"reason":"cancel + refund → cancellation per rule 4"}
+
+Input: "Your code is 482910. Do not share it."
+Output: {"category":"automation","confidence":0.98,"reason":"OTP from a system"}
+
+Input: "Hello 👋"
+Output: {"category":"greeting","confidence":0.95,"reason":"salutation only"}
+
+Input: "How much for 50 units shipped to Berlin, and do you offer net-30?"
+Output: {"category":"pricing","confidence":0.85,"reason":"quote request"}
+
+Input: "I've been charged twice for invoice #1234"
+Output: {"category":"payment","confidence":0.9,"reason":"billing issue on invoice"}
 
 Reply with ONLY a compact JSON object: {"category":"<slug>","confidence":<0..1>,"reason":"<short>"}.
 No prose, no markdown, no code fences.`;
@@ -113,8 +149,8 @@ No prose, no markdown, no code fences.`;
 async function classifyWithClaude(apiKey: string, message: string, context: string, provider: string) {
   const userBlock = [
     provider ? `Provider: ${provider}` : "",
-    context ? `Context (prior thread excerpt):\n${context}` : "",
-    `Inbound message:\n${message}`,
+    context ? `Background context (prior thread, DO NOT classify this):\n${context}` : "",
+    `<<<LATEST MESSAGE TO CLASSIFY>>>\n${message}\n<<<END>>>`,
   ].filter(Boolean).join("\n\n");
 
   const ctrl = new AbortController();
@@ -130,7 +166,7 @@ async function classifyWithClaude(apiKey: string, message: string, context: stri
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: "claude-3-5-haiku-latest",
+        model: "claude-haiku-4-5",
         max_tokens: 200,
         temperature: 0,
         system: SYSTEM_PROMPT,
