@@ -194,7 +194,7 @@ function parseClassification(text: string): { category: Category; confidence: nu
     // ignore
   }
   const rawCat = typeof parsed.category === "string" ? parsed.category.trim().toLowerCase() : "";
-  const category: Category = CATEGORY_SET.has(rawCat) ? rawCat as Category : "other";
+  const category: Category = CATEGORY_SET.has(rawCat) ? rawCat as Category : "needs_human_judgment";
   let confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
   if (!Number.isFinite(confidence)) confidence = 0;
   if (confidence < 0) confidence = 0;
