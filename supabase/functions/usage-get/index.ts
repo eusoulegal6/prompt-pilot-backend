@@ -21,6 +21,7 @@ const RECENT_LIMIT = 20;
 const PARTNER_PROJECTS: Array<{ ref: string; url: string }> = [
   { ref: "uxhtrpwgfqknxqzhssoe", url: "https://uxhtrpwgfqknxqzhssoe.supabase.co" }, // Smart Reply Hub
   { ref: "zzqdzubykkglytjdecqe", url: "https://zzqdzubykkglytjdecqe.supabase.co" }, // WhatsReply
+  { ref: "ocpphyjkstvfespxrajk", url: "https://ocpphyjkstvfespxrajk.supabase.co" }, // Prompt Pilot
 ];
 
 const partnerJwks = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
