@@ -38,6 +38,111 @@ const ALLOWED_AUDIO_MIME = new Set([
   "audio/m4a", "audio/x-m4a", "audio/wav", "audio/webm", "audio/aac", "audio/flac",
 ]);
 
+// ---- Intent classification (fire-and-forget) ----
+const INTENT_CATEGORIES = new Set(["appointment", "greeting", "support", "misc"]);
+const INTENT_SYSTEM_PROMPT = `You classify the LATEST inbound customer message into exactly ONE of FOUR categories.
+The message may come from typed text or from a transcribed voice note — treat both the same.
+Allowed categories (return the slug exactly):
+- appointment: booking, scheduling, rescheduling, confirming, or cancelling a visit/meeting/call/reservation (dates/times/availability).
+- greeting: pure salutation or social pleasantry with NO concrete request ("hi", "hello", "thanks", emoji-only).
+- support: user needs help, reports a problem, asks how to do something, billing/orders/refunds/complaints, technical or service questions.
+- misc: anything that doesn't fit the three above — small talk beyond a greeting, jokes, forwards, off-topic, ambiguous, multi-topic.
+
+PRECEDENCE: scheduling intent → appointment; pure salutation → greeting; concrete help/service question → support; otherwise → misc.
+Classify the LATEST inbound message only. Prior context is background. If unsure between support and misc, prefer misc.
+Reply with ONLY a compact JSON object: {"category":"<slug>","confidence":<0..1>,"reason":"<short>"}. No prose, no markdown.`;
+
+async function classifyAndPersistIntent(args: {
+  userId: string;
+  provider: string;
+  threadId: string;
+  message: string;
+  context: string;
+  source: "text" | "voice_transcript";
+  supabaseUrl: string;
+  serviceRoleKey: string;
+  anthropicKey: string;
+}) {
+  const { userId, provider, threadId, message, context, source, supabaseUrl, serviceRoleKey, anthropicKey } = args;
+  if (!userId || !provider || !threadId || !message) return;
+  try {
+    const userBlock = [
+      `Provider: ${provider}`,
+      `Source: ${source}`,
+      context ? `Background context (prior thread, DO NOT classify this):\n${context.slice(0, 2000)}` : "",
+      `<<<LATEST MESSAGE TO CLASSIFY>>>\n${message.slice(0, 4000)}\n<<<END>>>`,
+    ].filter(Boolean).join("\n\n");
+
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 12_000);
+    let res: Response;
+    try {
+      res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        signal: ctrl.signal,
+        headers: {
+          "x-api-key": anthropicKey,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5",
+          max_tokens: 150,
+          temperature: 0,
+          system: INTENT_SYSTEM_PROMPT,
+          messages: [{ role: "user", content: userBlock }],
+        }),
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) {
+      console.warn(`classify-intent(inline) anthropic ${res.status}`);
+      return;
+    }
+    const data = await res.json();
+    const text: string = data?.content?.[0]?.text ?? "";
+    let cleaned = text.trim().replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
+    const m = cleaned.match(/\{[\s\S]*\}/);
+    if (m) cleaned = m[0];
+    let parsed: { category?: unknown; confidence?: unknown; reason?: unknown } = {};
+    try { parsed = JSON.parse(cleaned); } catch { /* ignore */ }
+    const rawCat = typeof parsed.category === "string" ? parsed.category.trim().toLowerCase() : "";
+    const category = INTENT_CATEGORIES.has(rawCat) ? rawCat : "misc";
+    let confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+    if (!Number.isFinite(confidence)) confidence = 0;
+    if (confidence < 0) confidence = 0;
+    if (confidence > 1) confidence = 1;
+    const reason = typeof parsed.reason === "string" ? parsed.reason.slice(0, 280) : "";
+
+    const patchUrl = `${supabaseUrl}/rest/v1/thread_states?user_id=eq.${userId}&provider=eq.${encodeURIComponent(provider)}&thread_id=eq.${encodeURIComponent(threadId)}`;
+    const patchRes = await fetch(patchUrl, {
+      method: "PATCH",
+      headers: {
+        apikey: serviceRoleKey,
+        Authorization: `Bearer ${serviceRoleKey}`,
+        "Content-Type": "application/json",
+        Prefer: "return=minimal",
+      },
+      body: JSON.stringify({
+        intent_category: category,
+        intent_confidence: confidence,
+        intent_reason: reason,
+        intent_source: source,
+        intent_classified_at: new Date().toISOString(),
+      }),
+    });
+    if (!patchRes.ok) {
+      const t = (await patchRes.text()).slice(0, 200);
+      console.warn(`classify-intent(inline) patch ${patchRes.status}: ${t}`);
+      return;
+    }
+    console.log(`classify-intent(inline) OK user=${userId} provider=${provider} cat=${category} conf=${confidence} source=${source}`);
+  } catch (e) {
+    console.warn(`classify-intent(inline) failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 function logWhisperInvocation(row: {
   userId?: string;
   provider?: string;
@@ -824,6 +929,28 @@ serve(async (req) => {
       }
     } catch (e) {
       console.warn("media understanding pipeline failed, continuing text-only:", (e as Error).message);
+    }
+  }
+
+  // Fire-and-forget intent classification → persisted to thread_states for flagged-list.
+  {
+    const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
+    const hasVoice = mediaInputs.some((m) => ALLOWED_AUDIO_MIME.has(m.mimeType ?? ""));
+    const intentSource: "text" | "voice_transcript" = hasVoice ? "voice_transcript" : "text";
+    const intentMessage = (augmentedLatest || latestMessage || "").trim();
+    const intentContext = threadMessages.slice(-6).join("\n");
+    if (anthropicKey && threadId && provider && intentMessage) {
+      void classifyAndPersistIntent({
+        userId,
+        provider,
+        threadId,
+        message: intentMessage,
+        context: intentContext,
+        source: intentSource,
+        supabaseUrl: SUPABASE_URL,
+        serviceRoleKey: SUPABASE_SERVICE_ROLE_KEY,
+        anthropicKey,
+      });
     }
   }
 
