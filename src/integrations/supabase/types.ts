@@ -316,7 +316,9 @@ export type Database = {
       thread_states: {
         Row: {
           backend_decision: string
+          business_action: string
           created_at: string
+          customer_goal: string
           draft_preview: string
           extension_version: string | null
           id: string
@@ -324,7 +326,10 @@ export type Database = {
           intent_classified_at: string | null
           intent_confidence: number
           intent_reason: string
+          intent_review_reason: string
           intent_source: string
+          intent_subcategory: string
+          intent_urgency: string
           last_auto_sent_at: string | null
           last_auto_sent_message_key: string
           last_draft_at: string | null
@@ -335,6 +340,7 @@ export type Database = {
           last_opened_at: string | null
           last_sent_at: string | null
           latest_message: string | null
+          needs_human_review: boolean
           preview: string | null
           provider: string
           queue_scope: string | null
@@ -357,7 +363,9 @@ export type Database = {
         }
         Insert: {
           backend_decision?: string
+          business_action?: string
           created_at?: string
+          customer_goal?: string
           draft_preview?: string
           extension_version?: string | null
           id?: string
@@ -365,7 +373,10 @@ export type Database = {
           intent_classified_at?: string | null
           intent_confidence?: number
           intent_reason?: string
+          intent_review_reason?: string
           intent_source?: string
+          intent_subcategory?: string
+          intent_urgency?: string
           last_auto_sent_at?: string | null
           last_auto_sent_message_key?: string
           last_draft_at?: string | null
@@ -376,6 +387,7 @@ export type Database = {
           last_opened_at?: string | null
           last_sent_at?: string | null
           latest_message?: string | null
+          needs_human_review?: boolean
           preview?: string | null
           provider?: string
           queue_scope?: string | null
@@ -398,7 +410,9 @@ export type Database = {
         }
         Update: {
           backend_decision?: string
+          business_action?: string
           created_at?: string
+          customer_goal?: string
           draft_preview?: string
           extension_version?: string | null
           id?: string
@@ -406,7 +420,10 @@ export type Database = {
           intent_classified_at?: string | null
           intent_confidence?: number
           intent_reason?: string
+          intent_review_reason?: string
           intent_source?: string
+          intent_subcategory?: string
+          intent_urgency?: string
           last_auto_sent_at?: string | null
           last_auto_sent_message_key?: string
           last_draft_at?: string | null
@@ -417,6 +434,7 @@ export type Database = {
           last_opened_at?: string | null
           last_sent_at?: string | null
           latest_message?: string | null
+          needs_human_review?: boolean
           preview?: string | null
           provider?: string
           queue_scope?: string | null

@@ -146,16 +146,34 @@ serve(async (req) => {
     "preview",
     "latest_message",
     "intent_category",
+    "intent_subcategory",
     "intent_confidence",
     "intent_reason",
     "intent_source",
     "intent_classified_at",
+    "customer_goal",
+    "business_action",
+    "needs_human_review",
+    "intent_review_reason",
+    "intent_urgency",
     "updated_at",
     "thread_url",
   ].join(",");
 
-  // Filter: intent_category = 'misc' OR (intent_category = 'support' AND intent_confidence < 0.6)
-  const orFilter = "or=(intent_category.eq.misc,and(intent_category.eq.support,intent_confidence.lt.0.6))";
+  // Surface anything the classifier flagged for human review, plus a safety net:
+  // - high-risk subcategories (complaint, refund, human-agent, unclear)
+  // - low-confidence classifications (< 0.55)
+  // - legacy rows without the new flag: misc, or support with confidence < 0.6
+  const orFilter =
+    "or=(" +
+    [
+      "needs_human_review.eq.true",
+      "intent_subcategory.in.(complaint,refund_or_return,human_agent_request,unclear)",
+      "intent_confidence.lt.0.55",
+      "intent_category.eq.misc",
+      "and(intent_category.eq.support,intent_confidence.lt.0.6)",
+    ].join(",") +
+    ")";
 
   const params = new URLSearchParams();
   params.set("user_id", `eq.${userId}`);
