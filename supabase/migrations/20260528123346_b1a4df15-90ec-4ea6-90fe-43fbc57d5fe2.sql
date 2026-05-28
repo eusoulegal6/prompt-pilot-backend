@@ -1,0 +1,1 @@
+UPDATE public.extension_tokens SET revoked_at=now() WHERE id='2260806e-e3c7-4985-bb7d-9160207cb5e9';
