@@ -932,6 +932,28 @@ serve(async (req) => {
     }
   }
 
+  // Fire-and-forget intent classification → persisted to thread_states for flagged-list.
+  {
+    const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
+    const hasVoice = mediaInputs.some((m) => ALLOWED_AUDIO_MIME.has(m.mimeType ?? ""));
+    const intentSource: "text" | "voice_transcript" = hasVoice ? "voice_transcript" : "text";
+    const intentMessage = (augmentedLatest || latestMessage || "").trim();
+    const intentContext = threadMessages.slice(-6).join("\n");
+    if (anthropicKey && threadId && provider && intentMessage) {
+      void classifyAndPersistIntent({
+        userId,
+        provider,
+        threadId,
+        message: intentMessage,
+        context: intentContext,
+        source: intentSource,
+        supabaseUrl: SUPABASE_URL,
+        serviceRoleKey: SUPABASE_SERVICE_ROLE_KEY,
+        anthropicKey,
+      });
+    }
+  }
+
   const chatHeader = chatTitle
     ? `${providerLabel} chat: "${chatTitle}".`
     : `${providerLabel} chat.`;
