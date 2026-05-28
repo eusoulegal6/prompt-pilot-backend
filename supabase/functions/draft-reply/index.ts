@@ -22,6 +22,8 @@ const LIMITS = {
   providerLabel: 100,
 };
 
+const PREVIEW_MAX = 500;
+
 // Media understanding limits
 const MEDIA_LIMITS = {
   maxItems: 6,
@@ -531,7 +533,15 @@ function recordUsage(
   period: string,
   inputTokens: number,
   outputTokens: number,
-  meta: { subject: string; senderEmail: string; sourceUrl: string; decision: string; appKey: string },
+  meta: {
+    subject: string;
+    senderEmail: string;
+    sourceUrl: string;
+    decision: string;
+    appKey: string;
+    preview?: string;
+    latestMessage?: string;
+  },
   supabaseUrl: string,
   serviceRoleKey: string,
 ) {
@@ -589,6 +599,10 @@ function recordUsage(
       input_tokens: inputTokens,
       output_tokens: outputTokens,
       decision,
+      preview: meta.preview ? meta.preview.slice(0, PREVIEW_MAX) : null,
+      latest_message: meta.latestMessage
+        ? meta.latestMessage.slice(0, LIMITS.latestMessage)
+        : null,
     }),
   }).catch((err) => console.warn("Reply log insert error:", (err as Error).message));
 }
@@ -634,6 +648,7 @@ serve(async (req) => {
   const providerLabel = truncate(str(body.providerLabel, provider), LIMITS.providerLabel);
   const chatTitle = truncate(str(body.chatTitle), LIMITS.chatTitle);
   const latestMessage = truncate(str(body.latestMessage), LIMITS.latestMessage);
+  const preview = truncate(str(body.preview), PREVIEW_MAX);
   const sourceUrl = truncate(str(body.sourceUrl), 2000);
 
   const replySettings =
@@ -690,7 +705,7 @@ serve(async (req) => {
       period,
       0,
       0,
-      { subject: chatTitle, senderEmail: chatTitle, sourceUrl, decision, appKey },
+      { subject: chatTitle, senderEmail: chatTitle, sourceUrl, decision, appKey, preview, latestMessage },
       SUPABASE_URL,
       SUPABASE_SERVICE_ROLE_KEY,
     );
@@ -906,7 +921,7 @@ Draft the reply now.`;
       period,
       inputTokens,
       outputTokens,
-      { subject: chatTitle, senderEmail: chatTitle, sourceUrl, decision: finalDecision, appKey },
+      { subject: chatTitle, senderEmail: chatTitle, sourceUrl, decision: finalDecision, appKey, preview, latestMessage },
       SUPABASE_URL,
       SUPABASE_SERVICE_ROLE_KEY,
     );
