@@ -156,7 +156,7 @@ serve(async (req) => {
       .maybeSingle(),
     admin
       .from("reply_logs")
-      .select("created_at,subject,sender_email,decision")
+      .select("created_at,subject,sender_email,decision,latest_message,preview")
       .eq("user_id", userId)
       .eq("period", period)
       .order("created_at", { ascending: false })
@@ -191,6 +191,8 @@ serve(async (req) => {
       subject: r.subject,
       senderEmail: r.sender_email,
       decision: r.decision,
+      latestMessage: r.latest_message ?? null,
+      preview: r.preview ?? null,
     })),
   });
 });

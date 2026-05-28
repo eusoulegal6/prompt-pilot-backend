@@ -531,7 +531,7 @@ function recordUsage(
   period: string,
   inputTokens: number,
   outputTokens: number,
-  meta: { subject: string; senderEmail: string; sourceUrl: string; decision: string; appKey: string },
+  meta: { subject: string; senderEmail: string; sourceUrl: string; decision: string; appKey: string; latestMessage?: string },
   supabaseUrl: string,
   serviceRoleKey: string,
 ) {
@@ -589,6 +589,7 @@ function recordUsage(
       input_tokens: inputTokens,
       output_tokens: outputTokens,
       decision,
+      latest_message: meta.latestMessage ? meta.latestMessage.slice(0, 4000) : null,
     }),
   }).catch((err) => console.warn("Reply log insert error:", (err as Error).message));
 }
@@ -690,7 +691,7 @@ serve(async (req) => {
       period,
       0,
       0,
-      { subject: chatTitle, senderEmail: chatTitle, sourceUrl, decision, appKey },
+      { subject: chatTitle, senderEmail: chatTitle, sourceUrl, decision, appKey, latestMessage },
       SUPABASE_URL,
       SUPABASE_SERVICE_ROLE_KEY,
     );
@@ -906,7 +907,7 @@ Draft the reply now.`;
       period,
       inputTokens,
       outputTokens,
-      { subject: chatTitle, senderEmail: chatTitle, sourceUrl, decision: finalDecision, appKey },
+      { subject: chatTitle, senderEmail: chatTitle, sourceUrl, decision: finalDecision, appKey, latestMessage },
       SUPABASE_URL,
       SUPABASE_SERVICE_ROLE_KEY,
     );

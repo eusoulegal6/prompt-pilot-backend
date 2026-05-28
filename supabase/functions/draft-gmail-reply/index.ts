@@ -184,7 +184,7 @@ function recordUsage(
   period: string,
   inputTokens: number,
   outputTokens: number,
-  meta: { subject: string; senderEmail: string; sourceUrl: string; decision?: string },
+  meta: { subject: string; senderEmail: string; sourceUrl: string; decision?: string; latestMessage?: string },
   supabaseUrl: string,
   serviceRoleKey: string,
 ) {
@@ -263,6 +263,7 @@ function recordUsage(
       input_tokens: inputTokens,
       output_tokens: outputTokens,
       decision,
+      latest_message: meta.latestMessage ? meta.latestMessage.slice(0, 12000) : null,
     }),
   }).catch((err) => console.warn("Reply log insert error:", (err as Error).message));
 }
@@ -337,7 +338,7 @@ serve(async (req) => {
   if (decision !== "reply") {
     // Log-only: extension is reporting a flagged/skipped email. No AI, no quota check.
     console.log(`Log-only: user=${userId} decision=${decision} subject_len=${subject.length}`);
-    recordUsage(userId, period, 0, 0, { subject, senderEmail, sourceUrl, decision }, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    recordUsage(userId, period, 0, 0, { subject, senderEmail, sourceUrl, decision, latestMessage }, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     return jsonResponse({ ok: true, logged: true, decision });
   }
 
@@ -443,7 +444,7 @@ Draft a reply now.`;
 
     // --- Fire-and-forget: record usage ---
     if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
-      recordUsage(userId, period, inputTokens, outputTokens, { subject, senderEmail, sourceUrl, decision: "reply" }, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+      recordUsage(userId, period, inputTokens, outputTokens, { subject, senderEmail, sourceUrl, decision: "reply", latestMessage }, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     }
 
     return jsonResponse({ draft, model });
