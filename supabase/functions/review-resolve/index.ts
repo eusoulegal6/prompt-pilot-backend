@@ -9,6 +9,7 @@ const corsHeaders = {
   "Access-Control-Max-Age": "86400",
 };
 
+const FLAGGED_DECISIONS = ["review", "needs_review", "flagged"];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const PARTNER_PROJECTS: Array<{ ref: string; url: string }> = [
@@ -143,31 +144,7 @@ serve(async (req) => {
     return jsonResponse({ ok: false, error: "Invalid session." }, 401);
   }
 
-  const { data: stateData, error: stateError } = await admin
-    .from("thread_states")
-    .update({
-      review_active: false,
-      review_resolved_at: new Date().toISOString(),
-      status_value: "skipped",
-      backend_decision: "",
-    })
-    .eq("id", id)
-    .eq("user_id", userId)
-    .eq("review_active", true)
-    .select("id")
-    .maybeSingle();
-
-  if (stateError) {
-    console.error("review-resolve thread_states update error:", stateError.message);
-    return jsonResponse({ ok: false, error: "Failed to resolve review item." }, 500);
-  }
-
-  if (stateData) {
-    return jsonResponse({ ok: true, id: stateData.id, decision: "resolved" });
-  }
-
-  const FLAGGED_DECISIONS = ["review", "needs_review", "flagged"];
-  const { data: legacyData, error: legacyError } = await admin
+  const { data, error } = await admin
     .from("reply_logs")
     .update({ decision: "resolved" })
     .eq("id", id)
@@ -176,14 +153,14 @@ serve(async (req) => {
     .select("id")
     .maybeSingle();
 
-  if (legacyError) {
-    console.error("review-resolve reply_logs update error:", legacyError.message);
+  if (error) {
+    console.error("review-resolve update error:", error.message);
     return jsonResponse({ ok: false, error: "Failed to resolve review item." }, 500);
   }
 
-  if (!legacyData) {
+  if (!data) {
     return jsonResponse({ ok: false, error: "Review item not found." }, 404);
   }
 
-  return jsonResponse({ ok: true, id: legacyData.id, decision: "resolved" });
+  return jsonResponse({ ok: true, id: data.id, decision: "resolved" });
 });
