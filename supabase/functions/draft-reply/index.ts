@@ -103,6 +103,21 @@ function looksLikeRefusal(s: string): boolean {
   return REFUSAL_REGEX.test(s);
 }
 
+// WhatsApp voice messages arrive from the extension as just the bidi-wrapped
+// duration (e.g. "‪0:05‬"). Normalize to "[Voice message 0:05]" so the
+// dashboard activity panel can render a meaningful preview.
+const VOICE_DURATION_REGEX = /^\s*[\u202a-\u202e\u2066-\u2069]*\d{1,2}:\d{2}[\u202a-\u202e\u2066-\u2069]*\s*$/;
+function normalizeLatestMessage(raw: string | undefined | null): string | null {
+  if (!raw) return null;
+  const trimmed = String(raw).trim();
+  if (!trimmed) return null;
+  if (VOICE_DURATION_REGEX.test(trimmed)) {
+    const duration = trimmed.replace(/[\u202a-\u202e\u2066-\u2069]/g, "").trim();
+    return `[Voice message ${duration}]`;
+  }
+  return trimmed.slice(0, 4000);
+}
+
 function tryParseModelJson(raw: string): Record<string, unknown> | null {
   const trimmed = raw.trim().replace(/^```(?:json)?\s*([\s\S]*?)```$/i, "$1").trim();
   try {
