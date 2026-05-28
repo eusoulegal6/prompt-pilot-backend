@@ -10,13 +10,28 @@ type FlaggedItem = {
   preview: string | null;
   latest_message: string | null;
   intent_category: string;
+  intent_subcategory: string | null;
   intent_confidence: number | string;
   intent_reason: string;
   intent_source: string;
   intent_classified_at: string | null;
+  customer_goal: string | null;
+  business_action: string | null;
+  needs_human_review: boolean | null;
+  intent_review_reason: string | null;
+  intent_urgency: "low" | "medium" | "high" | null;
   updated_at: string;
   thread_url: string | null;
 };
+
+const URGENCY_STYLES: Record<string, string> = {
+  high: "bg-destructive/15 text-destructive border-destructive/30",
+  medium: "bg-primary/10 text-primary border-primary/20",
+  low: "bg-muted text-muted-foreground border-border",
+};
+
+const prettyIntent = (slug: string | null | undefined) =>
+  (slug ?? "").replace(/_/g, " ").trim() || "unclassified";
 
 const FLAGGED_LIST_URL = "https://ocpphyjkstvfespxrajk.supabase.co/functions/v1/flagged-list";
 const FLAGGED_LIST_ANON_KEY =
@@ -150,13 +165,36 @@ const FlaggedReviewSection = () => {
                         {item.sender || item.subject || "Unknown sender"}
                       </span>
                       <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                        {item.intent_category || "unclassified"} · {Math.round(confidence * 100)}%
+                        {prettyIntent(item.intent_subcategory || item.intent_category)} · {Math.round(confidence * 100)}%
                       </span>
+                      {item.intent_urgency ? (
+                        <span
+                          className={`rounded-full border px-2 py-0.5 text-xs capitalize ${
+                            URGENCY_STYLES[item.intent_urgency] ?? URGENCY_STYLES.medium
+                          }`}
+                        >
+                          {item.intent_urgency} urgency
+                        </span>
+                      ) : null}
                       <span className="text-xs text-muted-foreground">{formatTime(item.updated_at)}</span>
                     </div>
                     <p className="mt-2 whitespace-pre-wrap text-card-foreground/90">{message}</p>
-                    {item.intent_reason ? (
-                      <p className="mt-2 text-xs text-muted-foreground">{item.intent_reason}</p>
+                    {item.customer_goal ? (
+                      <p className="mt-2 text-xs text-card-foreground/80">
+                        <span className="font-medium">Customer goal: </span>
+                        {item.customer_goal}
+                      </p>
+                    ) : null}
+                    {item.business_action ? (
+                      <p className="mt-1 text-xs text-card-foreground/80">
+                        <span className="font-medium">Next action: </span>
+                        {item.business_action}
+                      </p>
+                    ) : null}
+                    {item.intent_review_reason || item.intent_reason ? (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        {item.intent_review_reason || item.intent_reason}
+                      </p>
                     ) : null}
                   </div>
                   {item.thread_url ? (
