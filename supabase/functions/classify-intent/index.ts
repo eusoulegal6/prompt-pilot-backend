@@ -225,6 +225,67 @@ serve(async (req) => {
     return jsonResponse({ error: "Invalid JSON body" }, 400);
   }
 
+  // Backfill mode: classify existing thread_states rows that have no intent_category yet.
+  if (body.action === "backfill" || body.backfill === true) {
+    let limit = Number(body.limit);
+    if (!Number.isFinite(limit) || limit < 1) limit = 25;
+    if (limit > 100) limit = 100;
+
+    const listUrl = `${SUPABASE_URL}/rest/v1/thread_states` +
+      `?user_id=eq.${userId}` +
+      `&or=(intent_category.is.null,intent_category.eq.)` +
+      `&select=id,provider,thread_id,sender,latest_message,preview,subject` +
+      `&order=updated_at.desc&limit=${limit}`;
+    const listRes = await fetch(listUrl, {
+      headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` },
+    });
+    if (!listRes.ok) {
+      const t = (await listRes.text()).slice(0, 300);
+      return jsonResponse({ error: "List failed", detail: t }, 502);
+    }
+    const rows = await listRes.json() as Array<Record<string, unknown>>;
+    const results: Array<Record<string, unknown>> = [];
+    let classified = 0;
+    let skipped = 0;
+    let failed = 0;
+    for (const row of rows) {
+      const rowId = str(row.id);
+      const provider = truncate(str(row.provider), LIMITS.provider);
+      const msg = truncate(str(row.latest_message) || str(row.preview) || str(row.subject), LIMITS.message);
+      if (!msg || !rowId) { skipped++; continue; }
+      try {
+        const { text } = await classifyWithClaude(ANTHROPIC_API_KEY, msg, "", provider, "text");
+        const result = parseClassification(text);
+        const patchBody = {
+          intent_category: result.category,
+          intent_confidence: result.confidence,
+          intent_reason: result.reason,
+          intent_source: "backfill",
+          intent_classified_at: new Date().toISOString(),
+        };
+        const patchUrl = `${SUPABASE_URL}/rest/v1/thread_states?id=eq.${rowId}&user_id=eq.${userId}`;
+        const pr = await fetch(patchUrl, {
+          method: "PATCH",
+          headers: {
+            apikey: SUPABASE_SERVICE_ROLE_KEY,
+            Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+            "Content-Type": "application/json",
+            Prefer: "return=minimal",
+          },
+          body: JSON.stringify(patchBody),
+        });
+        if (!pr.ok) { failed++; results.push({ id: rowId, error: `patch ${pr.status}` }); continue; }
+        classified++;
+        results.push({ id: rowId, category: result.category, confidence: result.confidence });
+      } catch (e) {
+        failed++;
+        results.push({ id: rowId, error: e instanceof Error ? e.message.slice(0, 120) : "error" });
+      }
+    }
+    console.log(`classify-intent backfill user=${userId} processed=${rows.length} classified=${classified} failed=${failed} skipped=${skipped}`);
+    return jsonResponse({ ok: true, mode: "backfill", processed: rows.length, classified, failed, skipped, results });
+  }
+
   // Accept `message` or `transcript` (alias for voice notes).
   const messageRaw = str(body.message) || str(body.transcript) || str(body.text);
   const message = truncate(messageRaw, LIMITS.message);
