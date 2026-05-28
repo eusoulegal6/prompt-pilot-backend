@@ -8,9 +8,70 @@ const corsHeaders = {
   "Access-Control-Max-Age": "86400",
 };
 
-const CATEGORIES = ["appointment", "greeting", "support", "misc"] as const;
-type Category = typeof CATEGORIES[number];
-const CATEGORY_SET = new Set<string>(CATEGORIES);
+// Fine-grained customer-service intents (subcategory).
+const INTENTS = [
+  "greeting_only",
+  "appointment_new",
+  "appointment_reschedule",
+  "appointment_cancel",
+  "pricing_question",
+  "product_or_service_question",
+  "order_status",
+  "payment_or_billing",
+  "refund_or_return",
+  "complaint",
+  "technical_support",
+  "human_agent_request",
+  "spam_or_irrelevant",
+  "unclear",
+] as const;
+type Intent = typeof INTENTS[number];
+const INTENT_SET = new Set<string>(INTENTS);
+
+const URGENCIES = ["low", "medium", "high"] as const;
+type Urgency = typeof URGENCIES[number];
+const URGENCY_SET = new Set<string>(URGENCIES);
+
+// Broad dashboard buckets. Keeps the existing intent_category contract stable.
+const BROAD_CATEGORIES = ["appointment", "support", "flagged", "misc"] as const;
+type BroadCategory = typeof BROAD_CATEGORIES[number];
+
+function broadCategoryFor(intent: Intent): BroadCategory {
+  switch (intent) {
+    case "appointment_new":
+    case "appointment_reschedule":
+    case "appointment_cancel":
+      return "appointment";
+    case "pricing_question":
+    case "product_or_service_question":
+    case "order_status":
+    case "payment_or_billing":
+    case "refund_or_return":
+    case "technical_support":
+      return "support";
+    case "complaint":
+    case "human_agent_request":
+      return "flagged";
+    case "greeting_only":
+    case "spam_or_irrelevant":
+    case "unclear":
+    default:
+      return "misc";
+  }
+}
+
+// Server-side fallback: when the model forgets needs_human_review, this catches the
+// obvious cases. Anything ambiguous or low-confidence is also surfaced.
+function shouldFlag(intent: Intent, confidence: number, modelFlag: boolean): boolean {
+  if (modelFlag) return true;
+  if (intent === "complaint") return true;
+  if (intent === "refund_or_return") return true;
+  if (intent === "human_agent_request") return true;
+  if (intent === "unclear") return true;
+  if (intent === "payment_or_billing") return true;
+  if (confidence < 0.55) return true;
+  return false;
+}
 
 const LIMITS = {
   message: 4000,
@@ -77,46 +138,53 @@ async function resolveUserId(req: Request, supabaseUrl: string, serviceRoleKey: 
   return extractUserIdFromJwt(token);
 }
 
-const SYSTEM_PROMPT = `You classify the LATEST inbound customer message into exactly ONE of FOUR categories.
-The message may come from a typed text or from a transcribed voice note — treat both the same. Transcripts may
-contain filler words ("uh", "um"), disfluencies, or minor speech-to-text errors; classify the underlying intent.
+const SYSTEM_PROMPT = `You are a customer-service intent classifier.
 
-Allowed categories (return the slug exactly):
-- appointment: booking, scheduling, rescheduling, confirming, or cancelling a visit / meeting / call / reservation.
-  Mentions of dates, times, availability ("tomorrow at 3", "next Tuesday", "are you free…"), or location for a visit.
-- greeting: a salutation or social pleasantry with NO concrete request yet ("hi", "hello", "good morning",
-  "how are you", "thanks", an emoji-only reply).
-- support: the user needs help, has a problem, asks "how do I…", reports something broken, asks about pricing,
-  orders, payments, refunds, complaints, technical/operational questions, or anything where a service answer is expected.
-- misc: anything that clearly doesn't fit the three above — small talk beyond a greeting, spam, automated/bot
-  messages, off-topic chatter, jokes, forwards, ambiguous or multi-topic messages.
+Your job is NOT to detect keywords. Your job is to understand what the customer is trying to accomplish and what action the business should take next. The message may come from typed text or from a transcribed voice note — treat both the same. Transcripts may contain filler words, disfluencies, or minor speech-to-text errors; classify the underlying intent.
 
-PRECEDENCE (first match wins):
-1. Explicit scheduling intent (book / reschedule / cancel a time slot, propose a date/time) → appointment.
-2. Pure salutation with no follow-up request → greeting.
-3. Any concrete service/help/billing/product question or complaint → support.
-4. Otherwise → misc.
+Classify the LATEST inbound customer message into exactly one intent.
 
-IMPORTANT:
-- Classify the LATEST inbound message only. Prior context is background, not the subject.
-- Do not invent categories. If genuinely unsure between support and misc, prefer misc.
-- If unsure between appointment and support, prefer appointment when a specific time/date is proposed.
+Intent definitions:
 
-EXAMPLES:
-Input: "Hi, can I book a haircut for Saturday at 3pm?"
-Output: {"category":"appointment","confidence":0.95,"reason":"booking with time"}
+- greeting_only: pure salutation, no request yet ("Hi", "Good morning", "Hello, how are you?").
+- appointment_new: customer wants to book / schedule / reserve / check availability for a NEW appointment, visit, call, consultation, meeting, or service.
+- appointment_reschedule: customer already has something scheduled and wants to change the date or time.
+- appointment_cancel: customer wants to cancel a scheduled appointment / visit / call / booking.
+- pricing_question: asking about price, quote, cost, plans, fees, discount, or payment amount.
+- product_or_service_question: asking what the business offers, how something works, requirements, location, opening hours, availability of a service, general information.
+- order_status: asking about an existing order, delivery, shipment, purchase, or service progress.
+- payment_or_billing: payment problems, invoices, charges, receipts, failed payments, billing confusion.
+- refund_or_return: asking for money back / refund / return / reversal / reimbursement.
+- complaint: expresses dissatisfaction, frustration, bad experience, poor service, delay, broken promise, negative feedback.
+- technical_support: reports something not working in a product, app, login, account, website, device, system, or technical process.
+- human_agent_request: explicitly asks for a person, manager, attendant, representative, or human help.
+- spam_or_irrelevant: spam, bot-like, unrelated, promotional, nonsense, not a customer-service conversation.
+- unclear: may be from a real customer, but intent is too ambiguous to know what they need.
 
-Input: "uhh hello, good morning"
-Output: {"category":"greeting","confidence":0.95,"reason":"salutation only"}
+Rules:
+- Choose the intent based on the customer's main GOAL, not by keyword matching.
+- Do NOT classify as appointment_* only because a date or time appears. If the date/time appears while complaining, paying, or asking about an order, classify according to the real issue.
+- If the message has multiple intents, choose the one that requires the most immediate business action.
+- Complaints, refund requests, payment/billing issues, human-agent requests, and unclear messages usually need human review.
+- Greetings do not need human review unless combined with another request.
+- Prior context is background, not the subject — classify the LATEST inbound message.
 
-Input: "my invoice was charged twice, can you refund one?"
-Output: {"category":"support","confidence":0.92,"reason":"billing problem"}
+Return ONLY valid JSON. No markdown, no code fences, no prose outside the object.
 
-Input: "lol that meme yesterday was wild"
-Output: {"category":"misc","confidence":0.85,"reason":"off-topic small talk"}
+Schema:
+{
+  "intent": "greeting_only | appointment_new | appointment_reschedule | appointment_cancel | pricing_question | product_or_service_question | order_status | payment_or_billing | refund_or_return | complaint | technical_support | human_agent_request | spam_or_irrelevant | unclear",
+  "confidence": number between 0 and 1,
+  "customer_goal": "short explanation of what the customer wants (<= 240 chars)",
+  "business_action": "what the business should do next (<= 240 chars)",
+  "needs_human_review": boolean,
+  "review_reason": "short reason or empty string (<= 240 chars)",
+  "urgency": "low | medium | high"
+}
 
-Reply with ONLY a compact JSON object: {"category":"<slug>","confidence":<0..1>,"reason":"<short>"}.
-No prose, no markdown, no code fences.`;
+Example:
+Input: "I paid yesterday at 3pm and still didn't receive confirmation."
+Output: {"intent":"payment_or_billing","confidence":0.94,"customer_goal":"Wants help with a missing payment confirmation.","business_action":"Check payment status and send confirmation or next steps.","needs_human_review":true,"review_reason":"Payment issue may require account verification.","urgency":"medium"}`;
 
 async function classifyWithClaude(
   apiKey: string,
@@ -150,7 +218,7 @@ async function classifyWithClaude(
       },
       body: JSON.stringify({
         model: "claude-haiku-4-5",
-        max_tokens: 150,
+        max_tokens: 400,
         temperature: 0,
         system: SYSTEM_PROMPT,
         messages: [{ role: "user", content: userBlock }],
@@ -173,24 +241,80 @@ async function classifyWithClaude(
   };
 }
 
-function parseClassification(text: string): { category: Category; confidence: number; reason: string } {
+type Classification = {
+  intent: Intent;
+  category: BroadCategory;
+  confidence: number;
+  customer_goal: string;
+  business_action: string;
+  needs_human_review: boolean;
+  review_reason: string;
+  urgency: Urgency;
+  reason: string;
+};
+
+function parseClassification(text: string): Classification {
   let cleaned = text.trim().replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
   const match = cleaned.match(/\{[\s\S]*\}/);
   if (match) cleaned = match[0];
-  let parsed: { category?: unknown; confidence?: unknown; reason?: unknown } = {};
+  let parsed: Record<string, unknown> = {};
   try {
     parsed = JSON.parse(cleaned);
   } catch {
     // ignore
   }
-  const rawCat = typeof parsed.category === "string" ? parsed.category.trim().toLowerCase() : "";
-  const category: Category = CATEGORY_SET.has(rawCat) ? (rawCat as Category) : "misc";
-  let confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+
+  // Accept either the new `intent` field or the legacy `category` field.
+  const rawIntent =
+    (typeof parsed.intent === "string" && parsed.intent.trim().toLowerCase()) ||
+    (typeof parsed.category === "string" && parsed.category.trim().toLowerCase()) ||
+    "";
+  const intent: Intent = INTENT_SET.has(rawIntent) ? (rawIntent as Intent) : "unclear";
+
+  let confidence = typeof parsed.confidence === "number" ? parsed.confidence : Number(parsed.confidence);
   if (!Number.isFinite(confidence)) confidence = 0;
   if (confidence < 0) confidence = 0;
   if (confidence > 1) confidence = 1;
-  const reason = typeof parsed.reason === "string" ? parsed.reason.slice(0, 280) : "";
-  return { category, confidence, reason };
+
+  const customer_goal = typeof parsed.customer_goal === "string" ? parsed.customer_goal.slice(0, 280) : "";
+  const business_action = typeof parsed.business_action === "string" ? parsed.business_action.slice(0, 280) : "";
+  const review_reason = typeof parsed.review_reason === "string" ? parsed.review_reason.slice(0, 280) : "";
+  const rawUrgency = typeof parsed.urgency === "string" ? parsed.urgency.trim().toLowerCase() : "";
+  const urgency: Urgency = URGENCY_SET.has(rawUrgency) ? (rawUrgency as Urgency) : "medium";
+  const modelFlag = Boolean(parsed.needs_human_review);
+  const needs_human_review = shouldFlag(intent, confidence, modelFlag);
+
+  // Keep `reason` for backward-compatible logging / display.
+  const legacyReason = typeof parsed.reason === "string" ? parsed.reason : (review_reason || customer_goal);
+  const reason = legacyReason.slice(0, 280);
+
+  return {
+    intent,
+    category: broadCategoryFor(intent),
+    confidence,
+    customer_goal,
+    business_action,
+    needs_human_review,
+    review_reason,
+    urgency,
+    reason,
+  };
+}
+
+function buildPersistBody(result: Classification, source: string) {
+  return {
+    intent_category: result.category,
+    intent_subcategory: result.intent,
+    intent_confidence: result.confidence,
+    intent_reason: result.reason,
+    intent_source: source,
+    intent_classified_at: new Date().toISOString(),
+    customer_goal: result.customer_goal,
+    business_action: result.business_action,
+    needs_human_review: result.needs_human_review,
+    intent_review_reason: result.review_reason,
+    intent_urgency: result.urgency,
+  };
 }
 
 serve(async (req) => {
@@ -198,7 +322,7 @@ serve(async (req) => {
     return new Response(null, { status: 204, headers: { ...corsHeaders, "Cache-Control": "no-store" } });
   }
   if (req.method === "GET") {
-    return jsonResponse({ ok: true, function: "classify-intent", categories: CATEGORIES });
+    return jsonResponse({ ok: true, function: "classify-intent", intents: INTENTS, categories: BROAD_CATEGORIES });
   }
   if (req.method !== "POST") {
     return jsonResponse({ error: "Method not allowed" }, 405);
@@ -256,13 +380,7 @@ serve(async (req) => {
       try {
         const { text } = await classifyWithClaude(ANTHROPIC_API_KEY, msg, "", provider, "text");
         const result = parseClassification(text);
-        const patchBody = {
-          intent_category: result.category,
-          intent_confidence: result.confidence,
-          intent_reason: result.reason,
-          intent_source: "backfill",
-          intent_classified_at: new Date().toISOString(),
-        };
+        const patchBody = buildPersistBody(result, "backfill");
         const patchUrl = `${SUPABASE_URL}/rest/v1/thread_states?id=eq.${rowId}&user_id=eq.${userId}`;
         const pr = await fetch(patchUrl, {
           method: "PATCH",
@@ -276,7 +394,7 @@ serve(async (req) => {
         });
         if (!pr.ok) { failed++; results.push({ id: rowId, error: `patch ${pr.status}` }); continue; }
         classified++;
-        results.push({ id: rowId, category: result.category, confidence: result.confidence });
+        results.push({ id: rowId, intent: result.intent, category: result.category, confidence: result.confidence, needs_human_review: result.needs_human_review });
       } catch (e) {
         failed++;
         results.push({ id: rowId, error: e instanceof Error ? e.message.slice(0, 120) : "error" });
@@ -313,13 +431,7 @@ serve(async (req) => {
 
     if (persist) {
       try {
-        const patchBody = {
-          intent_category: result.category,
-          intent_confidence: result.confidence,
-          intent_reason: result.reason,
-          intent_source: source,
-          intent_classified_at: new Date().toISOString(),
-        };
+        const patchBody = buildPersistBody(result, source);
         const url = `${SUPABASE_URL}/rest/v1/thread_states?user_id=eq.${userId}&provider=eq.${encodeURIComponent(provider)}&thread_id=eq.${encodeURIComponent(threadId)}`;
         await fetch(url, {
           method: "PATCH",
@@ -337,12 +449,18 @@ serve(async (req) => {
     }
 
     console.log(
-      `classify-intent OK ${Date.now() - started}ms user=${userId} provider=${provider} source=${source} cat=${result.category} conf=${result.confidence} in_tok=${inputTokens} out_tok=${outputTokens}`,
+      `classify-intent OK ${Date.now() - started}ms user=${userId} provider=${provider} source=${source} intent=${result.intent} cat=${result.category} conf=${result.confidence} review=${result.needs_human_review} urgency=${result.urgency} in_tok=${inputTokens} out_tok=${outputTokens}`,
     );
     return jsonResponse({
       ok: true,
+      intent: result.intent,
       category: result.category,
       confidence: result.confidence,
+      customer_goal: result.customer_goal,
+      business_action: result.business_action,
+      needs_human_review: result.needs_human_review,
+      review_reason: result.review_reason,
+      urgency: result.urgency,
       reason: result.reason,
       source,
       persisted: persist,
