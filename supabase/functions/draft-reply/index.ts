@@ -651,6 +651,22 @@ serve(async (req) => {
   const chatTitle = truncate(str(body.chatTitle), LIMITS.chatTitle);
   const latestMessage = truncate(str(body.latestMessage), LIMITS.latestMessage);
   const sourceUrl = truncate(str(body.sourceUrl), 2000);
+  const contactName = truncate(
+    str(body.contactName ?? body.senderName ?? body.sender),
+    LIMITS.chatTitle,
+  );
+  const senderEmail = truncate(
+    str(body.senderEmail ?? body.contactName ?? body.senderName),
+    320,
+  );
+  const subjectField = truncate(
+    str(body.subject ?? body.chatTitle ?? body.contactName),
+    300,
+  );
+  // Debug: log presence of metadata fields so we can confirm extension payload.
+  console.log(
+    `draft-reply payload-meta provider=${str(body.provider)} keys=[${Object.keys(body).join(",")}] chatTitle_len=${chatTitle.length} contactName_len=${contactName.length} sourceUrl_len=${sourceUrl.length} subject_len=${subjectField.length} senderEmail_len=${senderEmail.length}`,
+  );
 
   const replySettings =
     body.replySettings && typeof body.replySettings === "object" && !Array.isArray(body.replySettings)
@@ -706,7 +722,7 @@ serve(async (req) => {
       period,
       0,
       0,
-      { subject: chatTitle, senderEmail: chatTitle, sourceUrl, decision, appKey, latestMessage },
+      { subject: subjectField || chatTitle, senderEmail: senderEmail || chatTitle, sourceUrl, decision, appKey, latestMessage },
       SUPABASE_URL,
       SUPABASE_SERVICE_ROLE_KEY,
     );
@@ -922,7 +938,7 @@ Draft the reply now.`;
       period,
       inputTokens,
       outputTokens,
-      { subject: chatTitle, senderEmail: chatTitle, sourceUrl, decision: finalDecision, appKey, latestMessage },
+      { subject: subjectField || chatTitle, senderEmail: senderEmail || chatTitle, sourceUrl, decision: finalDecision, appKey, latestMessage },
       SUPABASE_URL,
       SUPABASE_SERVICE_ROLE_KEY,
     );
