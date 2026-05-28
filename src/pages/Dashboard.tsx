@@ -1,40 +1,12 @@
-import { useEffect } from "react";
 import { useAuthReady } from "@/hooks/useAuthReady";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import ConnectExtension from "@/components/ConnectExtension";
 import WhisperActivity from "@/components/WhisperActivity";
-import FlaggedReviewPanel from "@/components/FlaggedReviewPanel";
 
 const Dashboard = () => {
   const { user } = useAuthReady();
   const navigate = useNavigate();
-
-  useEffect(() => {
-    if (!user?.id) return;
-    const channel = supabase
-      .channel(`thread-states-${user.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "thread_states",
-          filter: `user_id=eq.${user.id}`,
-        },
-        (payload) => {
-          // Notify any listeners (review-list / usage widgets) to refetch.
-          window.dispatchEvent(
-            new CustomEvent("thread-states:changed", { detail: payload })
-          );
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [user?.id]);
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
@@ -59,7 +31,6 @@ const Dashboard = () => {
           </p>
         </div>
         <ConnectExtension />
-        <FlaggedReviewPanel />
         <WhisperActivity />
       </div>
     </div>
