@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import ConnectExtension from "@/components/ConnectExtension";
 import WhisperActivity from "@/components/WhisperActivity";
+import FlaggedReviewPanel from "@/components/FlaggedReviewPanel";
 
 const Dashboard = () => {
   const { user } = useAuthReady();
@@ -58,6 +59,7 @@ const Dashboard = () => {
           </p>
         </div>
         <ConnectExtension />
+        <FlaggedReviewPanel />
         <WhisperActivity />
       </div>
     </div>
