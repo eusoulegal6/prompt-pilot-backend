@@ -218,10 +218,8 @@ export type Database = {
           decision: string
           id: string
           input_tokens: number
-          latest_message: string | null
           output_tokens: number
           period: string
-          preview: string | null
           sender_email: string | null
           source_url: string | null
           subject: string | null
@@ -232,10 +230,8 @@ export type Database = {
           decision?: string
           id?: string
           input_tokens?: number
-          latest_message?: string | null
           output_tokens?: number
           period: string
-          preview?: string | null
           sender_email?: string | null
           source_url?: string | null
           subject?: string | null
@@ -246,10 +242,8 @@ export type Database = {
           decision?: string
           id?: string
           input_tokens?: number
-          latest_message?: string | null
           output_tokens?: number
           period?: string
-          preview?: string | null
           sender_email?: string | null
           source_url?: string | null
           subject?: string | null
