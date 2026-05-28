@@ -765,6 +765,48 @@ serve(async (req) => {
       SUPABASE_URL,
       SUPABASE_SERVICE_ROLE_KEY,
     );
+    // Fallback: ensure the dashboard sees this flagged thread even if the
+    // extension skips its sync-thread-state call (e.g. token expired, thread
+    // not in local state). Upsert a minimal thread_states row mirroring what
+    // sync-thread-state would have written for a `review_flagged` event.
+    if (userId && threadId && decision === "review") {
+      const nowIso = new Date().toISOString();
+      const upsertBody: Record<string, unknown> = {
+        user_id: userId,
+        provider,
+        thread_id: threadId,
+        subject: subjectField || chatTitle || null,
+        sender: contactName || null,
+        latest_message: latestMessage || null,
+        preview: latestMessage || null,
+        source_url: sourceUrl || null,
+        status_value: "review_ready",
+        backend_decision: "review",
+        review_reason: reviewReason || "needs_human_judgment",
+        review_summary: reviewSummary || "Flagged for human review.",
+        review_active: true,
+        review_opened_at: nowIso,
+        review_resolved_at: null,
+        last_event_type: "review_flagged",
+        last_event_at: nowIso,
+        source: "draft-reply-fallback",
+      };
+      fetch(
+        `${SUPABASE_URL}/rest/v1/thread_states?on_conflict=user_id,provider,thread_id`,
+        {
+          method: "POST",
+          headers: {
+            apikey: SUPABASE_SERVICE_ROLE_KEY,
+            Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+            "Content-Type": "application/json",
+            Prefer: "resolution=merge-duplicates,return=minimal",
+          },
+          body: JSON.stringify([upsertBody]),
+        },
+      ).catch((e) =>
+        console.warn("draft-reply fallback thread_states upsert failed:", (e as Error).message),
+      );
+    }
     if (decision === "review") {
       return jsonResponse({
         decision: "review",
