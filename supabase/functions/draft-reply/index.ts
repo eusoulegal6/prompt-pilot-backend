@@ -115,22 +115,28 @@ async function classifyAndPersistIntent(args: {
     if (confidence > 1) confidence = 1;
     const reason = typeof parsed.reason === "string" ? parsed.reason.slice(0, 280) : "";
 
-    const patchUrl = `${supabaseUrl}/rest/v1/thread_states?user_id=eq.${userId}&provider=eq.${encodeURIComponent(provider)}&thread_id=eq.${encodeURIComponent(threadId)}`;
-    const patchRes = await fetch(patchUrl, {
-      method: "PATCH",
+    // Upsert so we don't lose the classification if the thread_states row
+    // hasn't been created yet by sync-thread-state. Conflict target matches
+    // the unique index on (user_id, provider, thread_id).
+    const upsertUrl = `${supabaseUrl}/rest/v1/thread_states?on_conflict=user_id,provider,thread_id`;
+    const patchRes = await fetch(upsertUrl, {
+      method: "POST",
       headers: {
         apikey: serviceRoleKey,
         Authorization: `Bearer ${serviceRoleKey}`,
         "Content-Type": "application/json",
-        Prefer: "return=minimal",
+        Prefer: "resolution=merge-duplicates,return=minimal",
       },
-      body: JSON.stringify({
+      body: JSON.stringify([{
+        user_id: userId,
+        provider,
+        thread_id: threadId,
         intent_category: category,
         intent_confidence: confidence,
         intent_reason: reason,
         intent_source: source,
         intent_classified_at: new Date().toISOString(),
-      }),
+      }]),
     });
     if (!patchRes.ok) {
       const t = (await patchRes.text()).slice(0, 200);
