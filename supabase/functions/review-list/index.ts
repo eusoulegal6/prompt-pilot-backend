@@ -147,7 +147,7 @@ serve(async (req) => {
 
   const { data, error } = await admin
     .from("reply_logs")
-    .select("id,created_at,subject,sender_email,source_url,decision")
+    .select("id,created_at,subject,sender_email,source_url,decision,preview,latest_message")
     .eq("user_id", userId)
     .in("decision", FLAGGED_DECISIONS)
     .order("created_at", { ascending: true })
@@ -160,10 +160,9 @@ serve(async (req) => {
 
   const items = (data ?? []).map((r) => {
     const senderName = parseSenderName(r.sender_email);
-    // We don't store body content (privacy policy), so snippet stays null-safe.
-    const snippet = r.subject
-      ? String(r.subject).slice(0, SNIPPET_MAX)
-      : "";
+    // Prefer the message preview/body if available, otherwise fall back to subject.
+    const snippetSource = r.preview || r.latest_message || r.subject || "";
+    const snippet = String(snippetSource).slice(0, SNIPPET_MAX);
     return {
       id: r.id,
       createdAt: r.created_at,
@@ -171,6 +170,8 @@ serve(async (req) => {
       senderName,
       subject: r.subject,
       snippet,
+      preview: r.preview ?? null,
+      latestMessage: r.latest_message ?? null,
       reason: r.decision && r.decision !== "review" ? r.decision : null,
     };
   });
