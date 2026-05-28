@@ -648,24 +648,63 @@ serve(async (req) => {
   // { provider, providerLabel, chatTitle, latestMessage, messages, instructions, replySettings }
   const provider = str(body.provider, "whatsapp").toLowerCase();
   const providerLabel = truncate(str(body.providerLabel, provider), LIMITS.providerLabel);
-  const chatTitle = truncate(str(body.chatTitle), LIMITS.chatTitle);
+  const threadObj =
+    body.thread && typeof body.thread === "object" && !Array.isArray(body.thread)
+      ? (body.thread as Record<string, unknown>)
+      : {};
+  const threadId = truncate(str(body.threadId ?? body.thread_id ?? threadObj.threadId ?? threadObj.id), 300);
+  const chatTitle = truncate(str(body.chatTitle ?? threadObj.chatTitle ?? threadObj.subject), LIMITS.chatTitle);
   const latestMessage = truncate(str(body.latestMessage), LIMITS.latestMessage);
-  const sourceUrl = truncate(str(body.sourceUrl), 2000);
-  const contactName = truncate(
-    str(body.contactName ?? body.senderName ?? body.sender),
+  let sourceUrl = truncate(str(body.sourceUrl ?? threadObj.sourceUrl ?? threadObj.thread_url), 2000);
+  let contactName = truncate(
+    str(body.contactName ?? body.senderName ?? body.sender ?? threadObj.sender ?? threadObj.contactName),
     LIMITS.chatTitle,
   );
-  const senderEmail = truncate(
-    str(body.senderEmail ?? body.contactName ?? body.senderName),
+  let senderEmail = truncate(
+    str(body.senderEmail ?? body.contactName ?? body.senderName ?? threadObj.sender),
     320,
   );
-  const subjectField = truncate(
-    str(body.subject ?? body.chatTitle ?? body.contactName),
+  let subjectField = truncate(
+    str(body.subject ?? body.chatTitle ?? body.contactName ?? threadObj.subject ?? threadObj.chatTitle),
     300,
   );
+
+  // Fallback: if extension didn't include metadata (common for voice-message review pings),
+  // hydrate from thread_states by threadId.
+  if (threadId && (!subjectField || !senderEmail || !sourceUrl)) {
+    try {
+      const lookupRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/thread_states?user_id=eq.${userId}&thread_id=eq.${encodeURIComponent(threadId)}&provider=eq.${encodeURIComponent(provider)}&select=sender,subject,source_url,thread_url&limit=1`,
+        {
+          headers: {
+            apikey: SUPABASE_SERVICE_ROLE_KEY,
+            Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+          },
+        },
+      );
+      if (lookupRes.ok) {
+        const rows = (await lookupRes.json()) as Array<{
+          sender?: string;
+          subject?: string;
+          source_url?: string;
+          thread_url?: string;
+        }>;
+        const r = rows?.[0];
+        if (r) {
+          if (!subjectField) subjectField = truncate(str(r.subject ?? r.sender), 300);
+          if (!senderEmail) senderEmail = truncate(str(r.sender), 320);
+          if (!sourceUrl) sourceUrl = truncate(str(r.source_url ?? r.thread_url), 2000);
+          if (!contactName) contactName = truncate(str(r.sender), LIMITS.chatTitle);
+        }
+      }
+    } catch (e) {
+      console.warn("thread_states hydrate failed:", (e as Error).message);
+    }
+  }
+
   // Debug: log presence of metadata fields so we can confirm extension payload.
   console.log(
-    `draft-reply payload-meta provider=${str(body.provider)} keys=[${Object.keys(body).join(",")}] chatTitle_len=${chatTitle.length} contactName_len=${contactName.length} sourceUrl_len=${sourceUrl.length} subject_len=${subjectField.length} senderEmail_len=${senderEmail.length}`,
+    `draft-reply payload-meta provider=${str(body.provider)} threadId_len=${threadId.length} keys=[${Object.keys(body).join(",")}] chatTitle_len=${chatTitle.length} contactName_len=${contactName.length} sourceUrl_len=${sourceUrl.length} subject_len=${subjectField.length} senderEmail_len=${senderEmail.length}`,
   );
 
   const replySettings =
