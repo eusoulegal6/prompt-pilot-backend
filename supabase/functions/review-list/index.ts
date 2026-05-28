@@ -93,7 +93,7 @@ function parseSenderName(sender: string | null): string | null {
   // Try "Name <email@x>" form
   const m = sender.match(/^\s*"?([^"<]+?)"?\s*<[^>]+>\s*$/);
   if (m && m[1].trim()) return m[1].trim();
-  return null;
+  return sender.trim() || null;
 }
 
 serve(async (req) => {
@@ -141,8 +141,42 @@ serve(async (req) => {
     return jsonResponse({ error: "Invalid session." }, 401);
   }
 
-  // Flagged-for-review = decisions other than a final 'reply' / 'sent' / 'dismissed'.
-  // We treat 'review' and 'needs_review' as the flagged states; tolerant to either.
+  // Current WhatsApp extension writes review state + contact metadata to thread_states.
+  // reply_logs remains as a legacy fallback for older review items.
+  const { data: stateData, error: stateError } = await admin
+    .from("thread_states")
+    .select("id,updated_at,created_at,subject,sender,source_url,thread_url,review_reason,review_summary,preview,latest_message")
+    .eq("user_id", userId)
+    .eq("review_active", true)
+    .order("updated_at", { ascending: true })
+    .limit(LIMIT);
+
+  if (stateError) {
+    console.error("review-list thread_states query error:", stateError.message);
+    return jsonResponse({ error: "Failed to read review list." }, 500);
+  }
+
+  const stateItems = (stateData ?? []).map((r) => {
+    const sender = r.sender ? String(r.sender) : null;
+    const subject = r.subject ? String(r.subject) : sender;
+    const summary = r.review_summary ? String(r.review_summary) : "";
+    const preview = r.preview ? String(r.preview) : "";
+    return {
+      id: r.id,
+      createdAt: r.updated_at ?? r.created_at,
+      senderEmail: sender,
+      senderName: parseSenderName(sender),
+      subject,
+      sourceUrl: r.source_url || r.thread_url || null,
+      snippet: (summary || preview || subject || "").slice(0, SNIPPET_MAX),
+      reason: r.review_reason || null,
+    };
+  });
+
+  if (stateItems.length >= LIMIT) {
+    return jsonResponse({ items: stateItems });
+  }
+
   const FLAGGED_DECISIONS = ["review", "needs_review", "flagged"];
 
   const { data, error } = await admin
@@ -151,14 +185,14 @@ serve(async (req) => {
     .eq("user_id", userId)
     .in("decision", FLAGGED_DECISIONS)
     .order("created_at", { ascending: true })
-    .limit(LIMIT);
+    .limit(LIMIT - stateItems.length);
 
   if (error) {
     console.error("review-list query error:", error.message);
     return jsonResponse({ error: "Failed to read review list." }, 500);
   }
 
-  const items = (data ?? []).map((r) => {
+  const legacyItems = (data ?? []).map((r) => {
     const senderName = parseSenderName(r.sender_email);
     // We don't store body content (privacy policy), so snippet stays null-safe.
     const snippet = r.subject
@@ -170,10 +204,11 @@ serve(async (req) => {
       senderEmail: r.sender_email,
       senderName,
       subject: r.subject,
+      sourceUrl: r.source_url,
       snippet,
       reason: r.decision && r.decision !== "review" ? r.decision : null,
     };
   });
 
-  return jsonResponse({ items });
+  return jsonResponse({ items: [...stateItems, ...legacyItems] });
 });
