@@ -1,4 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { createRemoteJWKSet, jwtVerify } from "https://esm.sh/jose@5.9.6";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -13,6 +15,22 @@ function jsonResponse(body: Record<string, unknown>, status = 200) {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" },
   });
+}
+
+const PARTNER_PROJECTS: Array<{ ref: string; url: string }> = [
+  { ref: "uxhtrpwgfqknxqzhssoe", url: "https://uxhtrpwgfqknxqzhssoe.supabase.co" },
+  { ref: "zzqdzubykkglytjdecqe", url: "https://zzqdzubykkglytjdecqe.supabase.co" },
+  { ref: "ocpphyjkstvfespxrajk", url: "https://ocpphyjkstvfespxrajk.supabase.co" },
+];
+
+const partnerJwks = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
+function getPartnerJwks(url: string) {
+  let jwks = partnerJwks.get(url);
+  if (!jwks) {
+    jwks = createRemoteJWKSet(new URL(`${url}/auth/v1/.well-known/jwks.json`));
+    partnerJwks.set(url, jwks);
+  }
+  return jwks;
 }
 
 function extractUserIdFromJwt(token: string): string | null {
@@ -31,7 +49,34 @@ async function sha256Hex(input: string): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-256", data);
   return Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
-async function resolveUserId(req: Request, supabaseUrl: string, serviceRoleKey: string): Promise<string | null> {
+
+async function tryPartnerVerify(token: string): Promise<{ partnerRef: string; sub: string } | null> {
+  for (const partner of PARTNER_PROJECTS) {
+    try {
+      const { payload } = await jwtVerify(token, getPartnerJwks(partner.url), {
+        issuer: `${partner.url}/auth/v1`,
+      });
+      const sub = typeof payload.sub === "string" ? payload.sub : null;
+      if (sub) return { partnerRef: partner.ref, sub };
+    } catch (_) {
+      // Try next trusted project.
+    }
+  }
+  return null;
+}
+
+async function resolvePartnerUserId(admin: ReturnType<typeof createClient>, partnerRef: string, sub: string): Promise<string | null> {
+  const bridgeEmail = `partner+${partnerRef}+${sub}@bridge.sendsmart.local`;
+  const { data: list, error } = await admin.auth.admin.listUsers({ page: 1, perPage: 200 });
+  if (error) {
+    console.error("flagged-list partner listUsers error:", error.message);
+    return null;
+  }
+  const found = list?.users?.find((u: { email?: string | null }) => u.email === bridgeEmail);
+  return found?.id ?? null;
+}
+
+async function resolveUserId(req: Request, supabaseUrl: string, anonKey: string, serviceRoleKey: string): Promise<string | null> {
   const authHeader = req.headers.get("authorization") ?? "";
   const match = authHeader.match(/^Bearer\s+(.+)$/i);
   if (!match) return null;
@@ -51,7 +96,15 @@ async function resolveUserId(req: Request, supabaseUrl: string, serviceRoleKey: 
       return null;
     }
   }
-  return extractUserIdFromJwt(token);
+
+  const localClient = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authHeader } } });
+  const { data: localUser } = await localClient.auth.getUser(token);
+  if (localUser?.user?.id) return localUser.user.id;
+
+  const partner = await tryPartnerVerify(token);
+  if (!partner) return extractUserIdFromJwt(token);
+  const admin = createClient(supabaseUrl, serviceRoleKey);
+  return await resolvePartnerUserId(admin, partner.partnerRef, partner.sub);
 }
 
 serve(async (req) => {
