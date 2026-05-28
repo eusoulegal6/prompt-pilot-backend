@@ -19,6 +19,8 @@ const LIMITS = {
   source: 32,
 };
 
+const THREAD_ID_LIMIT = 256;
+
 const ALLOWED_SOURCES = new Set(["text", "voice", "voice_transcript", "transcript", "audio"]);
 
 function jsonResponse(body: Record<string, unknown>, status = 200) {
@@ -230,6 +232,8 @@ serve(async (req) => {
   const provider = truncate(str(body.provider), LIMITS.provider);
   const sourceRaw = truncate(str(body.source), LIMITS.source).toLowerCase();
   const source = ALLOWED_SOURCES.has(sourceRaw) ? sourceRaw : (str(body.transcript) ? "voice_transcript" : "text");
+  const threadId = truncate(str(body.thread_id), THREAD_ID_LIMIT);
+  const persist = Boolean(threadId && provider);
 
   if (!message) {
     return jsonResponse({ error: "Missing 'message' or 'transcript'." }, 400);
@@ -245,6 +249,32 @@ serve(async (req) => {
       source,
     );
     const result = parseClassification(text);
+
+    if (persist) {
+      try {
+        const patchBody = {
+          intent_category: result.category,
+          intent_confidence: result.confidence,
+          intent_reason: result.reason,
+          intent_source: source,
+          intent_classified_at: new Date().toISOString(),
+        };
+        const url = `${SUPABASE_URL}/rest/v1/thread_states?user_id=eq.${userId}&provider=eq.${encodeURIComponent(provider)}&thread_id=eq.${encodeURIComponent(threadId)}`;
+        await fetch(url, {
+          method: "PATCH",
+          headers: {
+            apikey: SUPABASE_SERVICE_ROLE_KEY,
+            Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+            "Content-Type": "application/json",
+            Prefer: "return=minimal",
+          },
+          body: JSON.stringify(patchBody),
+        });
+      } catch (e) {
+        console.error(`classify-intent persist failed user=${userId}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
     console.log(
       `classify-intent OK ${Date.now() - started}ms user=${userId} provider=${provider} source=${source} cat=${result.category} conf=${result.confidence} in_tok=${inputTokens} out_tok=${outputTokens}`,
     );
@@ -254,6 +284,7 @@ serve(async (req) => {
       confidence: result.confidence,
       reason: result.reason,
       source,
+      persisted: persist,
       usage: { input_tokens: inputTokens, output_tokens: outputTokens },
     });
   } catch (err) {

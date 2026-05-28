@@ -320,6 +320,11 @@ export type Database = {
           draft_preview: string
           extension_version: string | null
           id: string
+          intent_category: string
+          intent_classified_at: string | null
+          intent_confidence: number
+          intent_reason: string
+          intent_source: string
           last_auto_sent_at: string | null
           last_auto_sent_message_key: string
           last_draft_at: string | null
@@ -356,6 +361,11 @@ export type Database = {
           draft_preview?: string
           extension_version?: string | null
           id?: string
+          intent_category?: string
+          intent_classified_at?: string | null
+          intent_confidence?: number
+          intent_reason?: string
+          intent_source?: string
           last_auto_sent_at?: string | null
           last_auto_sent_message_key?: string
           last_draft_at?: string | null
@@ -392,6 +402,11 @@ export type Database = {
           draft_preview?: string
           extension_version?: string | null
           id?: string
+          intent_category?: string
+          intent_classified_at?: string | null
+          intent_confidence?: number
+          intent_reason?: string
+          intent_source?: string
           last_auto_sent_at?: string | null
           last_auto_sent_message_key?: string
           last_draft_at?: string | null
