@@ -45,6 +45,21 @@ function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max) + "…" : s;
 }
 
+// WhatsApp voice messages arrive from the extension as just the bidi-wrapped
+// duration (e.g. "‪0:05‬"). Normalize to "[Voice message 0:05]" so the
+// dashboard activity panel can render a meaningful preview.
+const VOICE_DURATION_REGEX = /^\s*[\u202a-\u202e\u2066-\u2069]*\d{1,2}:\d{2}[\u202a-\u202e\u2066-\u2069]*\s*$/;
+function normalizeLatestMessage(raw: string | undefined | null): string | null {
+  if (!raw) return null;
+  const trimmed = String(raw).trim();
+  if (!trimmed) return null;
+  if (VOICE_DURATION_REGEX.test(trimmed)) {
+    const duration = trimmed.replace(/[\u202a-\u202e\u2066-\u2069]/g, "").trim();
+    return `[Voice message ${duration}]`;
+  }
+  return trimmed.slice(0, 4000);
+}
+
 function cleanDraft(raw: string): string {
   let text = raw.trim();
   // Strip code fences
@@ -238,7 +253,7 @@ function recordUsage(
       input_tokens: inputTokens,
       output_tokens: outputTokens,
       decision,
-      latest_message: meta.latestMessage ? meta.latestMessage.slice(0, 4000) : null,
+      latest_message: normalizeLatestMessage(meta.latestMessage),
     }),
   }).catch((err) => console.warn("Reply log insert error:", (err as Error).message));
 }
