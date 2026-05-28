@@ -722,7 +722,7 @@ serve(async (req) => {
       period,
       0,
       0,
-      { subject: chatTitle, senderEmail: chatTitle, sourceUrl, decision, appKey, latestMessage },
+      { subject: subjectField || chatTitle, senderEmail: senderEmail || chatTitle, sourceUrl, decision, appKey, latestMessage },
       SUPABASE_URL,
       SUPABASE_SERVICE_ROLE_KEY,
     );
@@ -938,7 +938,7 @@ Draft the reply now.`;
       period,
       inputTokens,
       outputTokens,
-      { subject: chatTitle, senderEmail: chatTitle, sourceUrl, decision: finalDecision, appKey, latestMessage },
+      { subject: subjectField || chatTitle, senderEmail: senderEmail || chatTitle, sourceUrl, decision: finalDecision, appKey, latestMessage },
       SUPABASE_URL,
       SUPABASE_SERVICE_ROLE_KEY,
     );
