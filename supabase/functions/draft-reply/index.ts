@@ -589,7 +589,7 @@ function recordUsage(
       input_tokens: inputTokens,
       output_tokens: outputTokens,
       decision,
-      latest_message: meta.latestMessage ? meta.latestMessage.slice(0, 4000) : null,
+      latest_message: normalizeLatestMessage(meta.latestMessage),
     }),
   }).catch((err) => console.warn("Reply log insert error:", (err as Error).message));
 }
