@@ -11,6 +11,7 @@ const corsHeaders = {
 
 const LIMIT = 50;
 const SNIPPET_MAX = 200;
+const FLAGGED_STATUSES = ["needs_review", "review_ready", "flagged", "review"];
 
 const PARTNER_PROJECTS: Array<{ ref: string; url: string }> = [
   { ref: "uxhtrpwgfqknxqzhssoe", url: "https://uxhtrpwgfqknxqzhssoe.supabase.co" },
@@ -141,37 +142,58 @@ serve(async (req) => {
     return jsonResponse({ error: "Invalid session." }, 401);
   }
 
-  // Flagged-for-review = decisions other than a final 'reply' / 'sent' / 'dismissed'.
-  // We treat 'review' and 'needs_review' as the flagged states; tolerant to either.
-  const FLAGGED_DECISIONS = ["review", "needs_review", "flagged"];
+  // Parse optional ?limit=
+  const url = new URL(req.url);
+  const limitParam = Number(url.searchParams.get("limit"));
+  const limit = Number.isFinite(limitParam) && limitParam > 0 && limitParam <= 200
+    ? Math.floor(limitParam)
+    : LIMIT;
 
+  // Flagged items live on thread_states with a needs-review status_value.
   const { data, error } = await admin
-    .from("reply_logs")
-    .select("id,created_at,subject,sender_email,source_url,decision")
+    .from("thread_states")
+    .select(
+      "thread_id, provider, subject, sender, preview, latest_message, source_url, thread_url, status_value, review_reason, review_summary, review_opened_at, updated_at, created_at",
+    )
     .eq("user_id", userId)
-    .in("decision", FLAGGED_DECISIONS)
-    .order("created_at", { ascending: true })
-    .limit(LIMIT);
+    .in("status_value", FLAGGED_STATUSES)
+    .order("review_opened_at", { ascending: false, nullsFirst: false })
+    .limit(limit);
 
   if (error) {
     console.error("review-list query error:", error.message);
     return jsonResponse({ error: "Failed to read review list." }, 500);
   }
 
-  const items = (data ?? []).map((r) => {
-    const senderName = parseSenderName(r.sender_email);
-    // We don't store body content (privacy policy), so snippet stays null-safe.
-    const snippet = r.subject
-      ? String(r.subject).slice(0, SNIPPET_MAX)
-      : "";
+  const items = (data ?? []).map((r: Record<string, unknown>) => {
+    const provider = (r.provider as string) || "gmail";
+    const threadId = (r.thread_id as string) || "";
+    const senderRaw = (r.sender as string | null) ?? null;
+    const senderName = parseSenderName(senderRaw);
+    const bodyish =
+      (r.preview as string | null) ||
+      (r.latest_message as string | null) ||
+      (r.subject as string | null) ||
+      "";
+    const snippet = String(bodyish).slice(0, SNIPPET_MAX);
     return {
-      id: r.id,
-      createdAt: r.created_at,
-      senderEmail: r.sender_email,
+      id: `${provider}:${threadId}`,
+      thread_id: threadId,
+      provider,
+      subject: r.subject ?? null,
+      sender: senderRaw,
       senderName,
-      subject: r.subject,
       snippet,
-      reason: r.decision && r.decision !== "review" ? r.decision : null,
+      preview: r.preview ?? null,
+      reason: r.review_reason ?? null,
+      review_reason: r.review_reason ?? null,
+      review_summary: r.review_summary ?? null,
+      review_opened_at: r.review_opened_at ?? null,
+      updated_at: r.updated_at ?? null,
+      createdAt: r.review_opened_at ?? r.updated_at ?? r.created_at ?? null,
+      status_value: r.status_value ?? null,
+      thread_url: r.thread_url ?? r.source_url ?? null,
+      source_url: r.source_url ?? null,
     };
   });
 

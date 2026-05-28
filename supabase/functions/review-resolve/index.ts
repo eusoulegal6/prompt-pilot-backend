@@ -9,8 +9,7 @@ const corsHeaders = {
   "Access-Control-Max-Age": "86400",
 };
 
-const FLAGGED_DECISIONS = ["review", "needs_review", "flagged"];
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const FLAGGED_STATUSES = ["needs_review", "review_ready", "flagged", "review"];
 
 const PARTNER_PROJECTS: Array<{ ref: string; url: string }> = [
   { ref: "uxhtrpwgfqknxqzhssoe", url: "https://uxhtrpwgfqknxqzhssoe.supabase.co" },
@@ -106,16 +105,32 @@ serve(async (req) => {
   }
   const token = authHeader.replace("Bearer ", "");
 
-  let body: { id?: unknown } = {};
+  let body: { id?: unknown; thread_id?: unknown; provider?: unknown; resolution?: unknown } = {};
   try {
     body = await req.json();
   } catch {
     return jsonResponse({ ok: false, error: "Invalid JSON body." }, 400);
   }
-  const id = typeof body.id === "string" ? body.id.trim() : "";
-  if (!id || !UUID_RE.test(id)) {
-    return jsonResponse({ ok: false, error: "Missing or invalid 'id'." }, 400);
+
+  const rawId = typeof body.id === "string" ? body.id.trim() : "";
+  let threadId = typeof body.thread_id === "string" ? body.thread_id.trim() : "";
+  let provider = typeof body.provider === "string" ? body.provider.trim() : "";
+  // id may be "<provider>:<thread_id>"; parse it as a fallback.
+  if ((!threadId || !provider) && rawId.includes(":")) {
+    const idx = rawId.indexOf(":");
+    const p = rawId.slice(0, idx);
+    const t = rawId.slice(idx + 1);
+    if (!provider && p) provider = p;
+    if (!threadId && t) threadId = t;
   }
+  if (!threadId) {
+    return jsonResponse({ ok: false, error: "Missing 'thread_id'." }, 400);
+  }
+  if (!provider) provider = "gmail";
+
+  const resolutionRaw = typeof body.resolution === "string" ? body.resolution.trim() : "";
+  const resolution = resolutionRaw === "dismissed" ? "dismissed" : "handled";
+  const newStatus = resolution === "dismissed" ? "dismissed" : "resolved";
 
   const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -145,12 +160,17 @@ serve(async (req) => {
   }
 
   const { data, error } = await admin
-    .from("reply_logs")
-    .update({ decision: "resolved" })
-    .eq("id", id)
+    .from("thread_states")
+    .update({
+      status_value: newStatus,
+      review_active: false,
+      review_resolved_at: new Date().toISOString(),
+    })
     .eq("user_id", userId)
-    .in("decision", FLAGGED_DECISIONS)
-    .select("id")
+    .eq("thread_id", threadId)
+    .eq("provider", provider)
+    .in("status_value", FLAGGED_STATUSES)
+    .select("id, thread_id, provider, status_value")
     .maybeSingle();
 
   if (error) {
@@ -162,5 +182,12 @@ serve(async (req) => {
     return jsonResponse({ ok: false, error: "Review item not found." }, 404);
   }
 
-  return jsonResponse({ ok: true, id: data.id, decision: "resolved" });
+  return jsonResponse({
+    ok: true,
+    id: `${data.provider}:${data.thread_id}`,
+    thread_id: data.thread_id,
+    provider: data.provider,
+    status_value: data.status_value,
+    resolution,
+  });
 });
