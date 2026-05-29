@@ -63,13 +63,63 @@ async function classifyAndPersistIntent(args: {
   serviceRoleKey: string;
   anthropicKey: string;
 }) {
-  const { userId, provider, threadId, message, context, source, supabaseUrl, serviceRoleKey } = args;
+  const { userId, provider, threadId, message, context, source, supabaseUrl, serviceRoleKey, anthropicKey } = args;
   if (!userId || !provider || !threadId || !message) return;
   try {
-    // Ensure a thread_states row exists so classify-intent's PATCH can land
-    // even if sync-thread-state hasn't run yet.
+    const userBlock = [
+      `Provider: ${provider}`,
+      `Source: ${source}`,
+      context ? `Background context (prior thread, DO NOT classify this):\n${context.slice(0, 2000)}` : "",
+      `<<<LATEST MESSAGE TO CLASSIFY>>>\n${message.slice(0, 4000)}\n<<<END>>>`,
+    ].filter(Boolean).join("\n\n");
+
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 12_000);
+    let res: Response;
+    try {
+      res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        signal: ctrl.signal,
+        headers: {
+          "x-api-key": anthropicKey,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5",
+          max_tokens: 150,
+          temperature: 0,
+          system: INTENT_SYSTEM_PROMPT,
+          messages: [{ role: "user", content: userBlock }],
+        }),
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) {
+      console.warn(`classify-intent(inline) anthropic ${res.status}`);
+      return;
+    }
+    const data = await res.json();
+    const text: string = data?.content?.[0]?.text ?? "";
+    let cleaned = text.trim().replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
+    const m = cleaned.match(/\{[\s\S]*\}/);
+    if (m) cleaned = m[0];
+    let parsed: { category?: unknown; confidence?: unknown; reason?: unknown } = {};
+    try { parsed = JSON.parse(cleaned); } catch { /* ignore */ }
+    const rawCat = typeof parsed.category === "string" ? parsed.category.trim().toLowerCase() : "";
+    const category = INTENT_CATEGORIES.has(rawCat) ? rawCat : "misc";
+    let confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+    if (!Number.isFinite(confidence)) confidence = 0;
+    if (confidence < 0) confidence = 0;
+    if (confidence > 1) confidence = 1;
+    const reason = typeof parsed.reason === "string" ? parsed.reason.slice(0, 280) : "";
+
+    // Upsert so we don't lose the classification if the thread_states row
+    // hasn't been created yet by sync-thread-state. Conflict target matches
+    // the unique index on (user_id, provider, thread_id).
     const upsertUrl = `${supabaseUrl}/rest/v1/thread_states?on_conflict=user_id,provider,thread_id`;
-    await fetch(upsertUrl, {
+    const patchRes = await fetch(upsertUrl, {
       method: "POST",
       headers: {
         apikey: serviceRoleKey,
@@ -77,48 +127,25 @@ async function classifyAndPersistIntent(args: {
         "Content-Type": "application/json",
         Prefer: "resolution=merge-duplicates,return=minimal",
       },
-      body: JSON.stringify([{ user_id: userId, provider, thread_id: threadId }]),
-    }).catch(() => {});
-
-    // Delegate to the canonical classify-intent edge function so voice
-    // transcripts get the full 14-intent taxonomy + needs_human_review.
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 14_000);
-    const fnUrl = `${supabaseUrl}/functions/v1/classify-intent`;
-    let res: Response;
-    try {
-      res = await fetch(fnUrl, {
-        method: "POST",
-        signal: ctrl.signal,
-        headers: {
-          "Content-Type": "application/json",
-          apikey: serviceRoleKey,
-          // Service-role JWT so resolveUserId() decodes sub=<userId-of-caller>;
-          // we pass user_id_override below to pin classification to the
-          // real end-user instead of the service principal.
-          Authorization: `Bearer ${serviceRoleKey}`,
-          "x-user-id-override": userId,
-        },
-        body: JSON.stringify({
-          message,
-          context,
-          provider,
-          source,
-          thread_id: threadId,
-          user_id_override: userId,
-        }),
-      });
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!res.ok) {
-      const t = (await res.text()).slice(0, 200);
-      console.warn(`classify-intent(delegate) ${res.status}: ${t}`);
+      body: JSON.stringify([{
+        user_id: userId,
+        provider,
+        thread_id: threadId,
+        intent_category: category,
+        intent_confidence: confidence,
+        intent_reason: reason,
+        intent_source: source,
+        intent_classified_at: new Date().toISOString(),
+      }]),
+    });
+    if (!patchRes.ok) {
+      const t = (await patchRes.text()).slice(0, 200);
+      console.warn(`classify-intent(inline) patch ${patchRes.status}: ${t}`);
       return;
     }
-    console.log(`classify-intent(delegate) OK user=${userId} provider=${provider} source=${source}`);
+    console.log(`classify-intent(inline) OK user=${userId} provider=${provider} cat=${category} conf=${confidence} source=${source}`);
   } catch (e) {
-    console.warn(`classify-intent(delegate) failed: ${e instanceof Error ? e.message : String(e)}`);
+    console.warn(`classify-intent(inline) failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 
