@@ -200,3 +200,25 @@ Empty state: "No flagged messages right now."
   provider, source, category, confidence, token counts, elapsed ms.
 - All responses set `Cache-Control: no-store`.
 - `ANTHROPIC_API_KEY` lives only in backend secrets.
+
+## Voice transcripts
+
+Voice notes ride the same classifier as text — they don't have a separate path:
+
+1. The extension posts an audio attachment to `draft-reply`.
+2. `draft-reply` transcribes it via OpenAI Whisper (`whisper-1`) and writes a
+   row to `whisper_invocations` (transcript stored, no thread linkage).
+3. The transcript is folded into the latest-message payload used to draft the
+   reply, then `draft-reply` fires `classifyAndPersistIntent` (fire-and-forget).
+4. That helper now **delegates to the deployed `classify-intent` edge
+   function** with `source: "voice_transcript"`, authenticating with the
+   service-role key and passing the real end-user via the
+   `x-user-id-override` header (`classify-intent` only trusts that header
+   when the bearer equals `SUPABASE_SERVICE_ROLE_KEY`).
+5. `classify-intent` runs the full 14-intent taxonomy, applies the
+   `needs_human_review` safety net, and PATCHes `thread_states` — so voice
+   threads land in the flagged panel under the same rules as text.
+
+`whisper_invocations` itself is **not** consumed by the categorizer; it is
+observability only. Transcripts reach `thread_states` exclusively through
+the `draft-reply → classify-intent` path described above.

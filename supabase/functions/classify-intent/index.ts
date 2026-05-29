@@ -120,6 +120,13 @@ async function resolveUserId(req: Request, supabaseUrl: string, serviceRoleKey: 
   const match = authHeader.match(/^Bearer\s+(.+)$/i);
   if (!match) return null;
   const token = match[1];
+  // Trusted server-to-server call (e.g. draft-reply delegating voice-transcript
+  // classification). Allow it to act on behalf of the end-user via header.
+  if (token === serviceRoleKey) {
+    const override = (req.headers.get("x-user-id-override") ?? "").trim();
+    if (override) return override;
+    return null;
+  }
   if (token.startsWith("ext_")) {
     const raw = token.slice(4);
     if (!raw) return null;
