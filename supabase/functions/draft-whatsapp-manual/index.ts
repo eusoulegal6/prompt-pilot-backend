@@ -1,5 +1,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { generateText, stepCountIs, tool } from "npm:ai@4.3.16";
+import { createAnthropic } from "npm:@ai-sdk/anthropic@1.2.10";
+import { z } from "npm:zod@3.23.8";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -16,6 +19,52 @@ const LIMITS = {
 
 const ANTHROPIC_TIMEOUT_MS = 30_000;
 const MODEL = "claude-haiku-4-5-20251001";
+
+const CALENDAR_FN =
+  "https://zzqdzubykkglytjdecqe.supabase.co/functions/v1/calendar-query";
+
+function buildCalendarTools(userAccessToken: string) {
+  const call = async (body: Record<string, unknown>) => {
+    try {
+      const r = await fetch(CALENDAR_FN, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${userAccessToken}`,
+        },
+        body: JSON.stringify(body),
+      });
+      const json = await r.json().catch(() => ({}));
+      if (!r.ok) return { error: "calendar_error", status: r.status, ...json };
+      return json;
+    } catch (e) {
+      return { error: "calendar_unreachable", message: (e as Error)?.message };
+    }
+  };
+
+  return {
+    list_calendar_events: tool({
+      description:
+        "List the user's upcoming calendar events in a time window. Use when drafting replies that involve scheduling, availability, or referencing existing meetings.",
+      inputSchema: z.object({
+        from: z.string().datetime().describe("ISO start of window"),
+        to: z.string().datetime().describe("ISO end of window"),
+        limit: z.number().int().min(1).max(50).default(20),
+      }),
+      execute: ({ from, to, limit }) =>
+        call({ op: "events", from, to, limit }),
+    }),
+    check_calendar_freebusy: tool({
+      description:
+        "Check whether the user is free between `from` and `to`. Returns busy=true plus the conflicting events if any.",
+      inputSchema: z.object({
+        from: z.string().datetime(),
+        to: z.string().datetime(),
+      }),
+      execute: ({ from, to }) => call({ op: "freebusy", from, to }),
+    }),
+  };
+}
 
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -87,6 +136,9 @@ serve(async (req) => {
     "Keep it under 3 short sentences unless clearly required.",
     "Never invent facts, prices, dates, or commitments.",
     "Follow the user's instruction strictly. If the instruction conflicts with safety, prefer a neutral reply.",
+    "You can call check_calendar_freebusy before proposing any meeting time, and list_calendar_events to reference upcoming commitments. Today is " +
+      new Date().toISOString() +
+      ".",
   ].join(" ");
 
   const userBlock = [
@@ -103,40 +155,31 @@ serve(async (req) => {
 
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ANTHROPIC_TIMEOUT_MS);
-  let res: Response;
+  let rawText = "";
   try {
-    res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": anthropicKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 400,
-        system: systemPrompt,
-        messages: [{ role: "user", content: userBlock }],
-      }),
-      signal: ctrl.signal,
+    const anthropic = createAnthropic({ apiKey: anthropicKey });
+    const result = await generateText({
+      model: anthropic(MODEL),
+      system: systemPrompt,
+      messages: [{ role: "user", content: userBlock }],
+      tools: buildCalendarTools(token),
+      stopWhen: stepCountIs(50),
+      maxTokens: 400,
+      abortSignal: ctrl.signal,
     });
+    rawText = result.text ?? "";
   } catch (e) {
     clearTimeout(timer);
     const aborted = (e as Error)?.name === "AbortError";
-    return jsonResponse({ error: aborted ? "anthropic_timeout" : "anthropic_unreachable" }, 504);
+    console.error("anthropic call failed", e);
+    return jsonResponse(
+      { error: aborted ? "anthropic_timeout" : "anthropic_error", message: (e as Error)?.message },
+      aborted ? 504 : 502,
+    );
   }
   clearTimeout(timer);
 
-  if (!res.ok) {
-    await res.text().catch(() => "");
-    return jsonResponse({ error: "anthropic_error", status: res.status }, 502);
-  }
-
-  const data = await res.json().catch(() => null) as
-    | { content?: Array<{ type?: string; text?: string }>; model?: string }
-    | null;
-  const raw = data?.content?.find((c) => c?.type === "text")?.text ?? "";
-  const draft = cleanDraft(String(raw));
+  const draft = cleanDraft(rawText);
 
   if (!draft) return jsonResponse({ error: "empty_draft" }, 502);
 
@@ -176,5 +219,5 @@ serve(async (req) => {
     }
   }
 
-  return jsonResponse({ draft, draft_id: draftId, model: data?.model ?? MODEL });
+  return jsonResponse({ draft, draft_id: draftId, model: MODEL });
 });
