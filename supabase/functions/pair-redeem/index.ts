@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { jwtVerify, createRemoteJWKSet } from "https://esm.sh/jose@5.9.6";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -8,6 +9,65 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
   "Access-Control-Max-Age": "86400",
 };
+
+// Trusted partner Supabase projects whose JWTs we accept (kept in sync with pair-create).
+const PARTNER_PROJECTS: Array<{ ref: string; url: string }> = [
+  { ref: "uxhtrpwgfqknxqzhssoe", url: "https://uxhtrpwgfqknxqzhssoe.supabase.co" },
+  { ref: "zzqdzubykkglytjdecqe", url: "https://zzqdzubykkglytjdecqe.supabase.co" },
+  { ref: "ocpphyjkstvfespxrajk", url: "https://ocpphyjkstvfespxrajk.supabase.co" },
+];
+const partnerJwks = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
+function getPartnerJwks(url: string) {
+  let jwks = partnerJwks.get(url);
+  if (!jwks) {
+    jwks = createRemoteJWKSet(new URL(`${url}/auth/v1/.well-known/jwks.json`));
+    partnerJwks.set(url, jwks);
+  }
+  return jwks;
+}
+async function tryPartnerVerify(token: string): Promise<
+  { partnerRef: string; sub: string } | null
+> {
+  for (const partner of PARTNER_PROJECTS) {
+    try {
+      const { payload } = await jwtVerify(token, getPartnerJwks(partner.url), {
+        issuer: `${partner.url}/auth/v1`,
+      });
+      const sub = typeof payload.sub === "string" ? payload.sub : null;
+      if (!sub) continue;
+      return { partnerRef: partner.ref, sub };
+    } catch (_) { /* try next */ }
+  }
+  return null;
+}
+async function resolvePartnerUserId(
+  admin: any,
+  partnerRef: string,
+  sub: string,
+): Promise<string | null> {
+  const bridgeEmail = `partner+${partnerRef}+${sub}@bridge.sendsmart.local`;
+  const { data: created, error: createErr } = await admin.auth.admin.createUser({
+    email: bridgeEmail,
+    email_confirm: true,
+    user_metadata: { partner_ref: partnerRef, partner_sub: sub, bridge: true },
+  });
+  if (created?.user?.id) return created.user.id;
+  const msg = String(createErr?.message ?? "").toLowerCase();
+  if (createErr && !msg.includes("already") && !msg.includes("registered") && !msg.includes("exists")) {
+    console.error("pair-redeem partner createUser error:", createErr.message);
+    return null;
+  }
+  const { data: list, error: listErr } = await (admin.auth.admin as any).listUsers({
+    page: 1,
+    perPage: 200,
+  });
+  if (listErr) {
+    console.error("pair-redeem partner listUsers error:", listErr.message);
+    return null;
+  }
+  const found = list?.users?.find((u: { email?: string | null }) => u.email === bridgeEmail);
+  return found?.id ?? null;
+}
 
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -39,7 +99,17 @@ serve(async (req) => {
   }
 
   const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+  const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
   const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+  // Require an authenticated dashboard session so the extension token is bound
+  // to the user actually signed in to the dashboard, not whoever originally
+  // created the pairing code row.
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader?.startsWith("Bearer ")) {
+    return jsonResponse({ error: "Authentication required." }, 401);
+  }
+  const token = authHeader.replace("Bearer ", "");
 
   let body: { code?: string; label?: string };
   try {
@@ -62,6 +132,25 @@ serve(async (req) => {
 
   const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+  // Resolve the dashboard user (local Send Smart auth, then trusted partners).
+  let dashboardUserId: string | null = null;
+  const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    global: { headers: { Authorization: authHeader } },
+  });
+  const { data: userData } = await userClient.auth.getUser(token);
+  if (userData?.user?.id) {
+    dashboardUserId = userData.user.id;
+  }
+  if (!dashboardUserId) {
+    const partner = await tryPartnerVerify(token);
+    if (partner) {
+      dashboardUserId = await resolvePartnerUserId(admin, partner.partnerRef, partner.sub);
+    }
+  }
+  if (!dashboardUserId) {
+    return jsonResponse({ error: "Invalid session." }, 401);
+  }
+
   const { data: codeRow, error: lookupErr } = await admin
     .from("extension_pair_codes")
     .select("id, user_id, expires_at, consumed_at")
@@ -82,6 +171,11 @@ serve(async (req) => {
     return jsonResponse({ error: "This pairing code has expired." }, 400);
   }
 
+  // The code must belong to the same dashboard user that's redeeming it.
+  if (codeRow.user_id !== dashboardUserId) {
+    return jsonResponse({ error: "Pairing code does not belong to this account." }, 403);
+  }
+
   // Mint token
   const tokenBytes = new Uint8Array(32);
   crypto.getRandomValues(tokenBytes);
@@ -89,7 +183,7 @@ serve(async (req) => {
   const tokenHash = await sha256Hex(rawToken);
 
   const { error: tokenErr } = await admin.from("extension_tokens").insert({
-    user_id: codeRow.user_id,
+    user_id: dashboardUserId,
     token_hash: tokenHash,
     label,
   });
@@ -111,8 +205,8 @@ serve(async (req) => {
   // Fetch user email for friendly display
   let userEmail: string | null = null;
   try {
-    const { data: userData } = await admin.auth.admin.getUserById(codeRow.user_id);
-    userEmail = userData?.user?.email ?? null;
+    const { data: u } = await admin.auth.admin.getUserById(dashboardUserId);
+    userEmail = u?.user?.email ?? null;
   } catch (e) {
     console.warn("pair-redeem getUserById warning:", (e as Error).message);
   }
@@ -121,7 +215,7 @@ serve(async (req) => {
   return jsonResponse({
     // Canonical fields (used by Chrome extension)
     token: fullToken,
-    userId: codeRow.user_id,
+    userId: dashboardUserId,
     userEmail,
     // Back-compat alias
     extensionToken: fullToken,
