@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { generateText, stepCountIs, tool } from "npm:ai@4.3.16";
-import { createAnthropic } from "npm:@ai-sdk/anthropic@1.2.10";
+import { generateText, stepCountIs, tool } from "npm:ai@5.0.26";
+import { createAnthropic } from "npm:@ai-sdk/anthropic@2.0.10";
 import { z } from "npm:zod@3.23.8";
 
 const corsHeaders = {
@@ -164,7 +164,7 @@ serve(async (req) => {
       messages: [{ role: "user", content: userBlock }],
       tools: buildCalendarTools(token),
       stopWhen: stepCountIs(50),
-      maxTokens: 400,
+      maxOutputTokens: 400,
       abortSignal: ctrl.signal,
     });
     rawText = result.text ?? "";
