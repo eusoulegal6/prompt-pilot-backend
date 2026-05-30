@@ -315,10 +315,12 @@ export type Database = {
       }
       thread_states: {
         Row: {
+          auto_send: boolean
           backend_decision: string
           business_action: string
           created_at: string
           customer_goal: string
+          draft_id: string
           draft_preview: string
           extension_version: string | null
           id: string
@@ -362,10 +364,12 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          auto_send?: boolean
           backend_decision?: string
           business_action?: string
           created_at?: string
           customer_goal?: string
+          draft_id?: string
           draft_preview?: string
           extension_version?: string | null
           id?: string
@@ -409,10 +413,12 @@ export type Database = {
           user_id: string
         }
         Update: {
+          auto_send?: boolean
           backend_decision?: string
           business_action?: string
           created_at?: string
           customer_goal?: string
+          draft_id?: string
           draft_preview?: string
           extension_version?: string | null
           id?: string
