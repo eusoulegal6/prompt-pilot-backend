@@ -4,6 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import ConnectExtension from "@/components/ConnectExtension";
 import WhisperActivity from "@/components/WhisperActivity";
 import FlaggedReviewSection from "@/components/FlaggedReviewSection";
+import ManualDraftReply from "@/components/ManualDraftReply";
 
 const Dashboard = () => {
   const { user } = useAuthReady();
@@ -32,6 +33,7 @@ const Dashboard = () => {
           </p>
         </div>
         <ConnectExtension />
+        <ManualDraftReply />
         <FlaggedReviewSection />
         <WhisperActivity />
       </div>
