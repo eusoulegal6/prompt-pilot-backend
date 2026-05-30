@@ -3,6 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { generateText, stepCountIs, tool } from "npm:ai@5.0.26";
 import { createAnthropic } from "npm:@ai-sdk/anthropic@2.0.10";
 import { z } from "npm:zod@3.23.8";
+import { jwtVerify, createRemoteJWKSet } from "https://esm.sh/jose@5.9.6";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -22,6 +23,71 @@ const MODEL = "claude-haiku-4-5-20251001";
 
 const CALENDAR_FN =
   "https://zzqdzubykkglytjdecqe.supabase.co/functions/v1/calendar-query";
+
+// Trusted partner Supabase projects whose JWTs we accept.
+const PARTNER_PROJECTS: Array<{ ref: string; url: string }> = [
+  { ref: "uxhtrpwgfqknxqzhssoe", url: "https://uxhtrpwgfqknxqzhssoe.supabase.co" },
+  { ref: "zzqdzubykkglytjdecqe", url: "https://zzqdzubykkglytjdecqe.supabase.co" },
+  { ref: "ocpphyjkstvfespxrajk", url: "https://ocpphyjkstvfespxrajk.supabase.co" },
+];
+
+const partnerJwks = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
+function getPartnerJwks(url: string) {
+  let jwks = partnerJwks.get(url);
+  if (!jwks) {
+    jwks = createRemoteJWKSet(new URL(`${url}/auth/v1/.well-known/jwks.json`));
+    partnerJwks.set(url, jwks);
+  }
+  return jwks;
+}
+
+async function tryPartnerVerify(
+  token: string,
+): Promise<{ partnerRef: string; sub: string } | null> {
+  for (const partner of PARTNER_PROJECTS) {
+    try {
+      const { payload } = await jwtVerify(token, getPartnerJwks(partner.url), {
+        issuer: `${partner.url}/auth/v1`,
+      });
+      const sub = typeof payload.sub === "string" ? payload.sub : null;
+      if (!sub) continue;
+      return { partnerRef: partner.ref, sub };
+    } catch (_) {
+      // try next
+    }
+  }
+  return null;
+}
+
+async function resolveBridgeUserId(
+  admin: any,
+  partnerRef: string,
+  sub: string,
+): Promise<string | null> {
+  const bridgeEmail = `partner+${partnerRef}+${sub}@bridge.sendsmart.local`;
+  const { data: list, error: listErr } = await admin.auth.admin.listUsers({
+    page: 1,
+    perPage: 200,
+  });
+  if (!listErr) {
+    const found = list?.users?.find(
+      (u: { email?: string | null }) => u.email === bridgeEmail,
+    );
+    if (found?.id) return found.id;
+  } else {
+    console.error("resolveBridgeUserId listUsers error:", listErr.message);
+  }
+  const { data: created, error: createErr } = await admin.auth.admin.createUser({
+    email: bridgeEmail,
+    email_confirm: true,
+    user_metadata: { partner_ref: partnerRef, partner_sub: sub, bridge: true },
+  });
+  if (created?.user?.id) return created.user.id;
+  if (createErr) {
+    console.error("resolveBridgeUserId createUser error:", createErr.message);
+  }
+  return null;
+}
 
 function buildCalendarTools(userAccessToken: string) {
   const call = async (body: Record<string, unknown>) => {
@@ -104,10 +170,27 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return jsonResponse({ error: "method_not_allowed" }, 405);
 
-  // Auth — require a signed-in dashboard user.
+  // Auth — accept local Send Smart sessions or trusted partner JWTs.
   const auth = req.headers.get("authorization") || "";
   const token = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : "";
-  const userId = token ? extractUserIdFromJwt(token) : null;
+  if (!token) return jsonResponse({ error: "unauthorized" }, 401);
+
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!supabaseUrl || !serviceKey) {
+    return jsonResponse({ error: "server_misconfigured" }, 500);
+  }
+  const admin = createClient(supabaseUrl, serviceKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+  let userId: string | null = null;
+  const partner = await tryPartnerVerify(token);
+  if (partner) {
+    userId = await resolveBridgeUserId(admin, partner.partnerRef, partner.sub);
+  } else {
+    userId = extractUserIdFromJwt(token);
+  }
   if (!userId) return jsonResponse({ error: "unauthorized" }, 401);
 
   let body: Record<string, unknown> = {};
@@ -197,12 +280,7 @@ serve(async (req) => {
   let draftId = "";
   if (threadId) {
     draftId = crypto.randomUUID();
-    const supabaseUrl = Deno.env.get("SUPABASE_URL");
-    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-    if (supabaseUrl && serviceKey) {
-      const admin = createClient(supabaseUrl, serviceKey, {
-        auth: { persistSession: false, autoRefreshToken: false },
-      });
+    {
       const nowIso = new Date().toISOString();
       const { error: upsertErr } = await admin
         .from("thread_states")
