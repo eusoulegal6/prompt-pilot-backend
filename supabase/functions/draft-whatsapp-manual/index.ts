@@ -14,7 +14,7 @@ const LIMITS = {
 };
 
 const ANTHROPIC_TIMEOUT_MS = 30_000;
-const MODEL = "claude-3-5-haiku-20241022";
+const MODEL = "claude-haiku-4-5-20251001";
 
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
