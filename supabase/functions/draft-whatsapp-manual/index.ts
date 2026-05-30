@@ -168,6 +168,16 @@ serve(async (req) => {
       abortSignal: ctrl.signal,
     });
     rawText = result.text ?? "";
+    try {
+      const steps = (result as any).steps ?? [];
+      const toolCalls = steps.flatMap((s: any) =>
+        (s.toolCalls ?? []).map((c: any) => ({ name: c.toolName, args: c.args }))
+      );
+      console.log(
+        "draft-whatsapp-manual tool usage",
+        JSON.stringify({ stepCount: steps.length, toolCalls }),
+      );
+    } catch (_) { /* ignore */ }
   } catch (e) {
     clearTimeout(timer);
     const aborted = (e as Error)?.name === "AbortError";
