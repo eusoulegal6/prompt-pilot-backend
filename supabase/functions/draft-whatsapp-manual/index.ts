@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -69,6 +70,9 @@ serve(async (req) => {
 
   const incomingMessage = str(body.incomingMessage).slice(0, LIMITS.incomingMessage);
   const instruction = str(body.instruction).slice(0, LIMITS.instruction);
+  const threadId = str(body.thread_id) || str(body.threadId);
+  const provider = (str(body.provider) || "whatsapp").slice(0, 32);
+  const autoSend = body.autoSend === true || body.auto_send === true;
 
   if (!incomingMessage) return jsonResponse({ error: "incomingMessage_required" }, 400);
   if (!instruction) return jsonResponse({ error: "instruction_required" }, 400);
@@ -136,5 +140,41 @@ serve(async (req) => {
 
   if (!draft) return jsonResponse({ error: "empty_draft" }, 502);
 
-  return jsonResponse({ draft, model: data?.model ?? MODEL });
+  // Persist as a pending draft so the extension can pick it up and auto-send.
+  let draftId = "";
+  if (threadId) {
+    draftId = crypto.randomUUID();
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    if (supabaseUrl && serviceKey) {
+      const admin = createClient(supabaseUrl, serviceKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+      const nowIso = new Date().toISOString();
+      const { error: upsertErr } = await admin
+        .from("thread_states")
+        .upsert(
+          {
+            user_id: userId,
+            provider,
+            thread_id: threadId,
+            draft_preview: draft,
+            status_value: "draft_ready",
+            auto_send: autoSend,
+            draft_id: draftId,
+            last_draft_at: nowIso,
+            last_error: "",
+          },
+          { onConflict: "user_id,provider,thread_id" },
+        );
+      if (upsertErr) {
+        return jsonResponse(
+          { error: "persist_failed", message: upsertErr.message, draft },
+          500,
+        );
+      }
+    }
+  }
+
+  return jsonResponse({ draft, draft_id: draftId, model: data?.model ?? MODEL });
 });
