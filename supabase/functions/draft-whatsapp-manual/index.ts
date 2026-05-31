@@ -147,20 +147,6 @@ function cleanDraft(raw: string): string {
   let text = raw.trim();
   text = text.replace(/^```[\s\S]*?\n([\s\S]*?)```$/gm, "$1").trim();
   if (text.startsWith("```") && text.endsWith("```")) text = text.slice(3, -3).trim();
-  // Prefer content inside <reply>...</reply> tags if present.
-  const tagged = text.match(/<reply>([\s\S]*?)<\/reply>/i);
-  if (tagged && tagged[1].trim()) {
-    text = tagged[1].trim();
-  } else {
-    // Strip leading meta/reasoning paragraphs ("I understand...", "Let me...", "The user...").
-    const paragraphs = text.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
-    const metaRe =
-      /^(i (understand|see|notice|will|'ll|am going|need to)|let me|let's|the (user|sender|contact|message)|here('s| is)|okay,|sure,|first,|based on|since the|given that|i'll (draft|provide|respond|reply|write|craft))/i;
-    while (paragraphs.length > 1 && metaRe.test(paragraphs[0])) {
-      paragraphs.shift();
-    }
-    text = paragraphs.join("\n\n");
-  }
   text = text.replace(/^(?:reply|response|message)\s*:\s*/i, "").trim();
   if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
     text = text.slice(1, -1).trim();
@@ -228,13 +214,14 @@ serve(async (req) => {
 
   const systemPrompt = [
     "You draft a single WhatsApp reply on behalf of the user.",
-    "CALENDAR USAGE (mandatory when relevant): If the incoming message or the user's instruction involves scheduling, availability, confirming/rescheduling/cancelling a meeting, proposing a time, or referencing the user's agenda, you MUST first call check_calendar_freebusy for any specific time being discussed AND/OR list_calendar_events to see the user's real availability before writing the reply. Ground the reply in those real results — propose only times the user is actually free, and reference existing commitments accurately. Never invent times.",
-    "Today is " + new Date().toISOString() + ". Use the user's local timezone implied by their existing events.",
-    "After any tool calls, output ONLY the final reply text wrapped in <reply>...</reply> tags. Nothing before or after the tags.",
-    "Inside <reply>: no reasoning, no analysis, no preambles, no labels, no quotes, no markdown, no commentary — just the exact message the user will send.",
-    "Match WhatsApp conventions: short, conversational, sentence-case, no greeting if mid-thread. Keep it under 3 short sentences unless clearly required.",
-    "Never invent facts, prices, dates, or commitments beyond what tools confirm.",
+    "Output ONLY the message text the user will send — no quotes, no labels, no markdown, no commentary.",
+    "Match WhatsApp conventions: short, conversational, sentence-case, no greeting if mid-thread.",
+    "Keep it under 3 short sentences unless clearly required.",
+    "Never invent facts, prices, dates, or commitments.",
     "Follow the user's instruction strictly. If the instruction conflicts with safety, prefer a neutral reply.",
+    "You can call check_calendar_freebusy before proposing any meeting time, and list_calendar_events to reference upcoming commitments. Today is " +
+      new Date().toISOString() +
+      ".",
   ].join(" ");
 
   const userBlock = [
