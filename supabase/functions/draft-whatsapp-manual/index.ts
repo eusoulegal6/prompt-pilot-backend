@@ -145,6 +145,23 @@ function str(v: unknown): string {
 
 function cleanDraft(raw: string): string {
   let text = raw.trim();
+  // Prefer content inside <reply>...</reply> tags if present.
+  const tagMatch = text.match(/<reply>\s*([\s\S]*?)\s*<\/reply>/i);
+  if (tagMatch) {
+    text = tagMatch[1].trim();
+  } else {
+    // Strip common preamble patterns where the model "thinks out loud" before the reply.
+    // Heuristic: if the text contains a paragraph break and the first paragraph reads
+    // like reasoning (starts with "I ", "Let me", "The user", "Okay", etc.), drop it.
+    const paragraphs = text.split(/\n\s*\n/);
+    if (paragraphs.length > 1) {
+      const preambleRe = /^(i\s|let\s+me\b|the\s+user\b|okay[,.\s]|ok[,.\s]|here'?s\b|sure[,.\s]|understood[,.\s]|got\s+it\b|first[,.\s]|based\s+on\b|since\b|given\b|considering\b)/i;
+      while (paragraphs.length > 1 && preambleRe.test(paragraphs[0].trim())) {
+        paragraphs.shift();
+      }
+      text = paragraphs.join("\n\n").trim();
+    }
+  }
   text = text.replace(/^```[\s\S]*?\n([\s\S]*?)```$/gm, "$1").trim();
   if (text.startsWith("```") && text.endsWith("```")) text = text.slice(3, -3).trim();
   text = text.replace(/^(?:reply|response|message)\s*:\s*/i, "").trim();
@@ -214,7 +231,8 @@ serve(async (req) => {
 
   const systemPrompt = [
     "You draft a single WhatsApp reply on behalf of the user.",
-    "Output ONLY the message text the user will send — no quotes, no labels, no markdown, no commentary.",
+    "Output ONLY the final message text wrapped in <reply>...</reply> tags. Nothing before or after the tags.",
+    "Do NOT include any reasoning, preamble, analysis, or explanation — not before the tags, not inside them. The contents of <reply> must be exactly what the user will send, character for character.",
     "Match WhatsApp conventions: short, conversational, sentence-case, no greeting if mid-thread.",
     "Keep it under 3 short sentences unless clearly required.",
     "Never invent facts, prices, dates, or commitments.",
