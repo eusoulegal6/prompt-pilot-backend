@@ -170,6 +170,7 @@ serve(async (req) => {
       "needs_human_review.eq.true",
       "intent_subcategory.in.(complaint,refund_or_return,human_agent_request,unclear)",
       "intent_confidence.lt.0.55",
+      "intent_category.eq.complaint",
       "intent_category.eq.misc",
       "and(intent_category.eq.support,intent_confidence.lt.0.6)",
     ].join(",") +
