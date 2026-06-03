@@ -33,7 +33,7 @@ type Urgency = typeof URGENCIES[number];
 const URGENCY_SET = new Set<string>(URGENCIES);
 
 // Broad dashboard buckets. Keeps the existing intent_category contract stable.
-const BROAD_CATEGORIES = ["appointment", "support", "flagged", "misc"] as const;
+const BROAD_CATEGORIES = ["appointment", "support", "complaint", "flagged", "misc"] as const;
 type BroadCategory = typeof BROAD_CATEGORIES[number];
 
 function broadCategoryFor(intent: Intent): BroadCategory {
@@ -50,6 +50,7 @@ function broadCategoryFor(intent: Intent): BroadCategory {
     case "technical_support":
       return "support";
     case "complaint":
+      return "complaint";
     case "human_agent_request":
       return "flagged";
     case "greeting_only":
