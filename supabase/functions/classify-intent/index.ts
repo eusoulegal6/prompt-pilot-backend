@@ -76,7 +76,7 @@ function shouldFlag(intent: Intent, confidence: number, modelFlag: boolean): boo
 
 const LIMITS = {
   message: 4000,
-  context: 2000,
+  context: 12000,
   provider: 100,
   source: 32,
 };
@@ -146,7 +146,7 @@ const SYSTEM_PROMPT = `You are a customer-service intent classifier.
 
 Your job is NOT to detect keywords. Your job is to understand what the customer is trying to accomplish and what action the business should take next. The message may come from typed text or from a transcribed voice note — treat both the same. Transcripts may contain filler words, disfluencies, or minor speech-to-text errors; classify the underlying intent.
 
-Classify the LATEST inbound customer message into exactly one intent.
+Classify the THREAD into exactly one intent. Intent is defined by the SUM CONTEXT of all messages in the conversation, not by the latest message alone. The latest inbound message is the trigger that prompted classification, but you must weigh the entire transcript — earlier requests, prior business replies, unresolved questions, and the overall trajectory — to decide what the customer ultimately needs next.
 
 Intent definitions:
 
@@ -171,7 +171,7 @@ Rules:
 - If the message has multiple intents, choose the one that requires the most immediate business action.
 - Complaints, refund requests, payment/billing issues, human-agent requests, and unclear messages usually need human review.
 - Greetings do not need human review unless combined with another request.
-- Prior context is background, not the subject — classify the LATEST inbound message.
+- The full transcript IS the subject. Use every message (customer and business) to determine the thread's overall intent. If the latest message is a short follow-up ("ok", "thanks", "and you?"), the intent is still the unresolved request from earlier in the thread, not the follow-up itself.
 
 Return ONLY valid JSON. No markdown, no code fences, no prose outside the object.
 
@@ -204,8 +204,10 @@ async function classifyWithClaude(
   const userBlock = [
     provider ? `Provider: ${provider}` : "",
     `Source: ${sourceLabel}`,
-    context ? `Background context (prior thread, DO NOT classify this):\n${context}` : "",
-    `<<<LATEST MESSAGE TO CLASSIFY>>>\n${message}\n<<<END>>>`,
+    context
+      ? `Full conversation transcript (oldest → newest). Use the ENTIRE thread to determine intent:\n${context}`
+      : "",
+    `<<<LATEST INBOUND MESSAGE (trigger)>>>\n${message}\n<<<END>>>`,
   ].filter(Boolean).join("\n\n");
 
   const ctrl = new AbortController();
