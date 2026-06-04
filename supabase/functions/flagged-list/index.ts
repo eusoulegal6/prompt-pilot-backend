@@ -198,7 +198,19 @@ serve(async (req) => {
       return jsonResponse({ error: "Query failed" }, 502);
     }
     const items = await res.json();
-    const itemList: Array<Record<string, unknown>> = Array.isArray(items) ? items : [];
+    const rawList: Array<Record<string, unknown>> = Array.isArray(items) ? items : [];
+
+    // Filter out unknown senders - if there's no sender name, don't surface to the frontend.
+    const isUnknownSender = (item: Record<string, unknown>): boolean => {
+      const sender = typeof item.sender === "string" ? item.sender.trim() : "";
+      if (!sender) return true;
+      const lower = sender.toLowerCase();
+      if (lower === "unknown" || lower === "unknown sender") return true;
+      // jid-like values with no human name (e.g. "80393332084875@lid", "12345@c.us")
+      if (/^[\d+\-\s]+@[a-z.]+$/i.test(sender)) return true;
+      return false;
+    };
+    const itemList = rawList.filter((item) => !isUnknownSender(item));
 
     // Enrich each thread with recent messages from chat_snapshots + latest scan.
     if (itemList.length > 0) {
