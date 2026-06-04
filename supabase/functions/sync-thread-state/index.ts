@@ -13,6 +13,8 @@ const ALLOWED_EVENTS = new Set([
   "draft_saved",
   "reply_sent",
   "review_resolved",
+  "chat_snapshot",
+  "send_ambiguous",
 ]);
 
 const ALLOWED_STATUS = new Set([
