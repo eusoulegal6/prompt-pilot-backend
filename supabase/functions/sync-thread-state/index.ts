@@ -462,24 +462,41 @@ serve(async (req) => {
           inboundAt = isoOrNull(snapshot.capturedAt) ?? occurredAt;
         }
       } else if (eventType === "chat_scanned" && Array.isArray(scanMessages)) {
-        // Walk newest→oldest, pick first inbound; collect prior ones as context.
+        // Intent is defined by the SUM of all messages in the thread.
+        // Build the full transcript (oldest→newest) and pass it as context;
+        // the latest inbound becomes the trigger `message`. No per-message
+        // truncation beyond a generous cap so the classifier sees the whole
+        // conversation.
         const msgs = scanMessages as Array<Record<string, unknown>>;
-        const ctxParts: string[] = [];
+        const transcriptParts: string[] = [];
+        const MAX_PER_MSG = 600;
+        const MAX_TOTAL_CHARS = 12000;
+        let total = 0;
+        // Walk newest→oldest to find latest inbound trigger.
         for (let i = msgs.length - 1; i >= 0; i--) {
           const m = msgs[i];
+          if (!m || typeof m !== "object") continue;
+          if (m.fromMe !== true && !inboundText) {
+            const txt = str(m.body);
+            if (txt) {
+              inboundText = truncate(txt, LIMITS.text);
+              inboundAt = scanCapturedAt ?? occurredAt;
+              break;
+            }
+          }
+        }
+        // Build full transcript oldest→newest, capped.
+        for (const m of msgs) {
           if (!m || typeof m !== "object") continue;
           const fromMe = m.fromMe === true;
           const txt = str(m.body);
           if (!txt) continue;
-          if (!inboundText && !fromMe) {
-            inboundText = truncate(txt, LIMITS.text);
-            inboundAt = scanCapturedAt ?? occurredAt;
-          } else if (inboundText) {
-            ctxParts.push(`${fromMe ? "business" : "customer"}: ${txt.slice(0, 240)}`);
-            if (ctxParts.length >= 6) break;
-          }
+          const line = `${fromMe ? "business" : "customer"}: ${txt.slice(0, MAX_PER_MSG)}`;
+          if (total + line.length + 1 > MAX_TOTAL_CHARS) break;
+          transcriptParts.push(line);
+          total += line.length + 1;
         }
-        contextText = ctxParts.reverse().join("\n");
+        contextText = transcriptParts.join("\n");
       }
 
       const shouldClassify = Boolean(inboundText) &&
