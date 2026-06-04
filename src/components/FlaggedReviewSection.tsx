@@ -22,6 +22,14 @@ type FlaggedItem = {
   intent_urgency: "low" | "medium" | "high" | null;
   updated_at: string;
   thread_url: string | null;
+  recent_messages?: Array<{
+    body: string;
+    from_me: boolean;
+    captured_at: string;
+    msg_type: string | null;
+    source: "snapshot" | "scan";
+  }>;
+  latest_scan_message_count?: number | null;
 };
 
 const URGENCY_STYLES: Record<string, string> = {
@@ -179,6 +187,37 @@ const FlaggedReviewSection = () => {
                       <span className="text-xs text-muted-foreground">{formatTime(item.updated_at)}</span>
                     </div>
                     <p className="mt-2 whitespace-pre-wrap text-card-foreground/90">{message}</p>
+                    {item.recent_messages && item.recent_messages.length > 0 ? (
+                      <div className="mt-3 space-y-1.5 rounded-md border border-border bg-muted/30 p-2">
+                        <p className="text-xs font-medium text-muted-foreground">
+                          Recent messages ({item.recent_messages.length})
+                        </p>
+                        <ul className="space-y-1">
+                          {item.recent_messages.map((m, idx) => (
+                            <li
+                              key={`${item.thread_id}-${idx}-${m.captured_at}`}
+                              className={`text-xs rounded px-2 py-1 ${
+                                m.from_me
+                                  ? "bg-primary/10 text-card-foreground/90"
+                                  : "bg-card text-card-foreground/90 border border-border"
+                              }`}
+                            >
+                              <div className="flex items-center gap-1.5 mb-0.5">
+                                <span className="font-medium">
+                                  {m.from_me ? "You" : item.sender || "Them"}
+                                </span>
+                                {m.captured_at ? (
+                                  <span className="text-muted-foreground">
+                                    · {formatTime(m.captured_at)}
+                                  </span>
+                                ) : null}
+                              </div>
+                              <p className="whitespace-pre-wrap">{m.body}</p>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
                     {item.customer_goal ? (
                       <p className="mt-2 text-xs text-card-foreground/80">
                         <span className="font-medium">Customer goal: </span>
