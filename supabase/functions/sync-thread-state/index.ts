@@ -413,6 +413,25 @@ serve(async (req) => {
     }).catch((e) => console.warn("chat_snapshot insert failed:", (e as Error).message));
   }
 
+  // Append to chat_scans time-series (best-effort)
+  if (scan) {
+    fetch(`${SUPABASE_URL}/rest/v1/chat_scans`, {
+      method: "POST",
+      headers: { ...headers, Prefer: "return=minimal" },
+      body: JSON.stringify({
+        user_id: userId,
+        provider,
+        thread_id: threadId,
+        captured_at: scanCapturedAt ?? occurredAt,
+        message_count: scanMessageCount,
+        messages: scanMessages,
+        source,
+        extension_version: extensionVersion,
+        raw_payload: body,
+      }),
+    }).catch((e) => console.warn("chat_scan insert failed:", (e as Error).message));
+  }
+
   console.log(
     `sync-thread-state OK user=${userId} provider=${provider} thread=${threadId} event=${eventType} status=${statusValue} review_active=${reviewActive}`,
   );
