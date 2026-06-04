@@ -62,6 +62,25 @@ function bool(v: unknown): boolean {
   return v === true;
 }
 
+// Derive a display name from a thread_id when the client didn't send one.
+// Examples:
+//   "whatsapp:assistente picpay|https://…avatar.jpg" -> "assistente picpay"
+//   "whatsapp:+55 22 98134-0128|https://…"            -> "+55 22 98134-0128"
+//   "Maria"                                            -> "Maria"
+//   "12345@c.us"                                       -> "12345"
+function deriveSenderFromThreadId(threadId: string): string {
+  let s = (threadId || "").trim();
+  if (!s) return "";
+  // strip provider prefix
+  s = s.replace(/^(whatsapp|gmail|imessage|telegram|instagram|messenger):/i, "");
+  // take the part before the avatar URL separator
+  const pipe = s.indexOf("|");
+  if (pipe >= 0) s = s.slice(0, pipe);
+  // strip jid suffixes like @c.us / @lid / @s.whatsapp.net
+  s = s.replace(/@[\w.]+$/, "");
+  return s.trim();
+}
+
 function isoOrNull(v: unknown): string | null {
   const s = typeof v === "string" ? v.trim() : "";
   if (!s) return null;
