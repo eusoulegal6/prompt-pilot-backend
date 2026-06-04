@@ -15,6 +15,7 @@ const ALLOWED_EVENTS = new Set([
   "review_resolved",
   "chat_snapshot",
   "send_ambiguous",
+  "chat_scanned",
 ]);
 
 const ALLOWED_STATUS = new Set([
