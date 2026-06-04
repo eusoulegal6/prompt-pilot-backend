@@ -1,145 +1,65 @@
-## Goal
+# Pipeline: chat_snapshot + chat_scanned → Dashboard
 
-Make the backend match the extension contract you described:
+Make the snapshot/scan data captured by `sync-thread-state` the primary live feed in the web app, following the `flagged-list` pattern (auth-aware edge function + React component with polling + realtime).
 
-1. `draft-reply` returns strict JSON, and *never* puts "I can't reply to this" prose into `draft`. It self-corrects to `decision: "review"` when the model produces a refusal.
-2. `sync-thread-state` already exists and largely works — align its event semantics, field names, and audit trail to the spec.
+## 1. New edge function: `thread-activity`
 
-Auth (extension `ext_...` bearer + JWT fallback) and quota behavior stay exactly as they are.
+Path: `supabase/functions/thread-activity/index.ts`
 
----
+- Reuse the `resolveUserId` helper from `flagged-list` verbatim (JWT + `ext_` token + partner JWKS) so both web sessions and extension tokens work.
+- `GET /?health=1` → `{ ok: true, function: "thread-activity" }`.
+- `GET /?limit=20&thread_id=<optional>` returns:
+  ```json
+  {
+    "ok": true,
+    "threads": [ /* thread_states rows, latest snapshot+scan denormalized */ ],
+    "snapshots": [ /* chat_snapshots time-series, newest first */ ],
+    "scans": [ /* chat_scans time-series, newest first, messages truncated */ ]
+  }
+  ```
+- Query strategy (service-role REST, filtered by `user_id`):
+  - `thread_states`: select thread_id, provider, sender, subject, thread_url, snapshot_*, scan_*, last_snapshot, last_scan, updated_at — order by `snapshot_captured_at desc nulls last`, limit N.
+  - `chat_snapshots`: select all columns, order `captured_at desc`, limit N.
+  - `chat_scans`: select metadata + `messages` truncated to last 5 entries (slice server-side to keep payload small), order `captured_at desc`, limit N.
+- If `thread_id` query param is set, filter all three queries by it.
+- All responses include CORS headers + `Cache-Control: no-store`.
 
-## 1. Update `supabase/functions/draft-reply/index.ts`
+## 2. Frontend component: `ThreadActivitySection`
 
-Keep all existing infrastructure: `resolveUserId`, `checkQuota`, `recordUsage`, CORS, Anthropic call, timeouts, model. Only change the prompt + response-validation layer.
+Path: `src/components/ThreadActivitySection.tsx`
 
-### a. Stronger system prompt — force structured JSON
+- Mirrors `FlaggedReviewSection` structure: `fetch` + `setInterval` poll (15s) + Supabase realtime channel on `chat_snapshots` and `chat_scans` INSERT (filtered by `user_id`) to trigger reload.
+- Two stacked panels inside the card:
+  1. **Live snapshots** — list of latest `chat_snapshots` (sender, body preview, unread count badge, from_me indicator, captured_at).
+  2. **Recent scans** — list of latest `chat_scans` (sender/thread, message_count, captured_at, expandable accordion to show truncated `messages[]`).
+- Uses semantic Tailwind tokens (no raw colors), `lucide-react` icons (`Activity`, `MessageSquare`, `ScanLine`).
+- Header refresh button + spinner identical to `FlaggedReviewSection`.
 
-Replace the current "return only the message text" system prompt with one that asks Claude to emit a small JSON object so we can route reply / review / skip without regex-sniffing prose:
+## 3. Dashboard wiring
 
-```
-You are an assistant that decides whether to draft a reply on {providerLabel}, and if so, drafts it.
+`src/pages/Dashboard.tsx`: import and render `<ThreadActivitySection />` directly above `<FlaggedReviewSection />` so the live pipeline is the first thing users see.
 
-Return ONE JSON object, no markdown, no code fences, matching exactly one of:
+## 4. Realtime publication
 
-  { "decision": "reply",  "draft": "<message text>" }
-  { "decision": "review", "reviewReason": "<snake_case>", "reviewSummary": "<short sentence>" }
-  { "decision": "skip",   "reviewReason": "<snake_case>", "reviewSummary": "<short sentence>" }
-
-Choose "review" or "skip" (NOT "reply") when the latest message is:
-- automated, menu-driven, OTP, or a bot prompt  -> reason "menu_bot" or "automated_system"
-- a broadcast / notification / system message    -> "broadcast_or_notification"
-- missing context to safely respond              -> "missing_context"
-- sensitive (legal, medical, financial advice)   -> "sensitive_request"
-- something that needs human judgment            -> "needs_human_judgment"
-- a thread where no reply is appropriate         -> "no_reply"
-
-If decision is "reply":
-- "draft" is ONLY the message text the user will send. No quotes, no labels, no markdown, no commentary.
-- Match {providerLabel} conventions: short, conversational, sentence-case.
-- Never invent facts, prices, dates, commitments.
-- No greeting if mid-thread. Under 3 short sentences unless clearly required.
-- Never put refusal/explanation text into "draft". If you would refuse, return decision "review" instead.
-{identity / style / knowledge / extra / signature blocks unchanged}
-```
-
-### b. Parse + validate the model output
-
-After the Anthropic call:
-
-1. Try `JSON.parse` on `cleanDraft(rawDraft)`.
-2. If parse fails, fall back: treat `rawDraft` as a candidate draft string and run heuristic detection (below).
-3. If parse succeeds, validate:
-   - `decision ∈ {reply, review, skip}` else → review/`needs_human_judgment`.
-   - For `reply`: require non-empty `draft`. Run heuristic detection on it; if it looks like a refusal, convert to `review`/`automated_system`.
-   - For `review` / `skip`: clamp `reviewReason` to the allowed set (else `needs_human_judgment`), truncate `reviewSummary` ≤ 500.
-
-### c. Refusal-detection heuristic
-
-A small regex test on the draft text. If it matches, override to `review`:
-
-```
-/(i (should|cannot|can'?t|won'?t) (draft|reply|respond|provide))|
- (this (appears|seems) to be (an )?(automated|system|bot))|
- (no (visible )?options to respond)|
- (cannot generate (a )?reply)|
- (as an ai)/i
-```
-
-Override payload:
-```json
-{ "decision": "review",
-  "reviewReason": "automated_system",
-  "reviewSummary": "Automated or menu-driven message; do not auto-reply." }
-```
-
-### d. Response shapes (strict)
-
-- Reply: `{ decision: "reply", draft, model, inputTokens, outputTokens }`
-- Review: `{ decision: "review", reviewReason, reviewSummary, model, inputTokens, outputTokens }`
-- Skip: `{ decision: "skip", reviewReason, reviewSummary, model, inputTokens, outputTokens }`
-
-`recordUsage` is already called with `decision`. Keep the rule that only `decision === "reply"` increments `emails_used`. `review`/`skip` still log tokens to `reply_logs` for visibility.
-
-### e. Pre-call short-circuit (unchanged)
-
-If the *client* already passed `decision: "review" | "skip"`, keep the existing log-only path and return the matching shape — no Anthropic call.
-
----
-
-## 2. Update `supabase/functions/sync-thread-state/index.ts`
-
-The function exists and the table has the right columns under different names. Two options:
-
-**Option A (chosen):** keep the existing column names (`status_value`, `review_active`, `review_resolved_at`, `thread_state_history`) — they already work and the dashboard will be wired against them. Only adjust event semantics + add the missing field.
-
-Concretely:
-
-1. **Event semantics fix** — current `review_flagged` already sets `review_active = true`, but it does not stamp an "opened at" timestamp. Add a new column `review_opened_at` (see migration below) and set it on `review_flagged`. Clear `review_resolved_at` on `review_flagged`. Leave `draft_saved` / `reply_sent` / `review_resolved` semantics as-is — they already match the spec.
-
-2. **Audit trail** — `thread_state_history` already exists and is appended on every event. Add a `payload jsonb` column so we capture the raw event for debugging (spec asks for it).
-
-3. **Validation** — already strict. No change.
-
-4. **Response** — already `{ ok: true }`. No change.
-
-5. **Auth** — already supports `ext_...` and JWT. No change.
-
-### Migration (schema only)
-
+Migration adds:
 ```sql
-ALTER TABLE public.thread_states
-  ADD COLUMN IF NOT EXISTS review_opened_at timestamptz;
-
-ALTER TABLE public.thread_state_history
-  ADD COLUMN IF NOT EXISTS payload jsonb;
-
-CREATE INDEX IF NOT EXISTS idx_thread_states_active_review
-  ON public.thread_states (user_id, review_active, review_opened_at DESC)
-  WHERE review_active = true;
+ALTER PUBLICATION supabase_realtime ADD TABLE public.chat_snapshots;
+ALTER PUBLICATION supabase_realtime ADD TABLE public.chat_scans;
 ```
+Plus `REPLICA IDENTITY FULL` on both so updates carry full rows (no schema change otherwise — RLS already permits authenticated user reads of own rows).
 
-No new tables, no RLS changes (existing policies already restrict reads to `auth.uid() = user_id`; writes go through the service role inside the function).
+## 5. Handoff docs
 
----
+Update `sync-thread-state-handoff.md` with a new "Consumers" section pointing to `thread-activity` + `ThreadActivitySection.tsx`, so the next agent knows the read path is now live.
 
-## 3. Dashboard contract (already satisfied, documenting only)
+## Out of scope (call out, don't build)
 
-- "Flagged messages" tile = `count(*) from thread_states where user_id = auth.uid() and review_active = true`.
-- Review queue list = same filter, ordered by `review_opened_at desc, updated_at desc`.
+- Thread Inspector drawer (full scan history per thread) — defer until users ask.
+- Pagination beyond `limit` query param — current cap (50) is enough for the dashboard card.
+- Surfacing snapshots/scans inside the flagged list — keep concerns separated.
 
-No frontend changes in this plan — dashboard already reads `thread_states` once data starts flowing. The reason the tile is `0` today is the extension still has not started calling `sync-thread-state`; that is an extension-side change, out of scope here.
+## Technical notes
 
----
-
-## Files touched
-
-- `supabase/functions/draft-reply/index.ts` — prompt + JSON parsing + refusal heuristic
-- `supabase/functions/sync-thread-state/index.ts` — set `review_opened_at` on `review_flagged`, write `payload` jsonb to history
-- `supabase/migrations/<new>.sql` — add `review_opened_at`, `payload`, partial index
-
-## Out of scope
-
-- Extension code changes (the extension lives outside this repo now)
-- Dashboard UI changes (already reads the right table)
-- Auth bridging / Realtime (separate decision, not blocking this work)
+- `chat_scans.messages` is unbounded jsonb; the edge function slices to last 5 messages before returning to keep the payload under a few KB per row.
+- The component dedupes snapshots by `thread_id` for the "Live snapshots" panel (latest wins), same dedupe pattern `FlaggedReviewSection` uses for sender.
+- No new secrets, no DB schema changes beyond the realtime publication.
