@@ -503,7 +503,7 @@ serve(async (req) => {
         (!priorClassifiedAt || (inboundAt && new Date(inboundAt) > new Date(priorClassifiedAt)));
 
       if (shouldClassify) {
-        fetch(`${SUPABASE_URL}/functions/v1/classify-intent`, {
+        const classifyPromise = fetch(`${SUPABASE_URL}/functions/v1/classify-intent`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -518,8 +518,20 @@ serve(async (req) => {
             context: contextText,
             source: eventType === "chat_scanned" ? "scan" : "snapshot",
           }),
+        }).then(async (r) => {
+          if (!r.ok) {
+            const t = (await r.text()).slice(0, 300);
+            console.warn(`classify-intent ${r.status}: ${t}`);
+          }
         }).catch((e) => console.warn("classify-intent dispatch failed:", (e as Error).message));
-        console.log(`classify-intent dispatched user=${userId} thread=${threadId} event=${eventType}`);
+        // Ensure the background request actually completes after we return.
+        const rt = (globalThis as { EdgeRuntime?: { waitUntil: (p: Promise<unknown>) => void } }).EdgeRuntime;
+        if (rt && typeof rt.waitUntil === "function") {
+          rt.waitUntil(classifyPromise);
+        } else {
+          await classifyPromise;
+        }
+        console.log(`classify-intent dispatched user=${userId} thread=${threadId} event=${eventType} ctx_len=${contextText.length}`);
       }
     } catch (e) {
       console.warn("classify-intent gating failed:", (e as Error).message);
