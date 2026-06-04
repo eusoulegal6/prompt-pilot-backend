@@ -293,10 +293,6 @@ serve(async (req) => {
   if (reviewOpenedAt) {
     upsertBody.review_opened_at = reviewOpenedAt;
   }
-  if (eventType === "review_flagged") {
-    // Explicitly clear any previous resolution timestamp
-    upsertBody.review_resolved_at = null;
-  }
 
   // Snapshot denormalization onto thread_states (chat_snapshot events)
   let snapLastMessage: Record<string, unknown> = {};
