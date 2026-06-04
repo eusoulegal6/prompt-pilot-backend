@@ -9,12 +9,7 @@ const corsHeaders = {
 };
 
 const ALLOWED_EVENTS = new Set([
-  "review_flagged",
-  "draft_saved",
-  "reply_sent",
-  "review_resolved",
   "chat_snapshot",
-  "send_ambiguous",
   "chat_scanned",
 ]);
 
@@ -251,24 +246,11 @@ serve(async (req) => {
   const lastHandledMessageKey = truncate(str(status.lastHandledMessageKey), LIMITS.msgKey);
   const lastAutoSentMessageKey = truncate(str(status.lastAutoSentMessageKey), LIMITS.msgKey);
 
-  // Derive review_active state from event + status
-  let reviewActive: boolean;
-  let reviewResolvedAt: string | null = null;
-  let reviewOpenedAt: string | null = null;
-  if (eventType === "review_flagged") {
-    reviewActive = true;
-    reviewOpenedAt = occurredAt;
-  } else if (eventType === "draft_saved") {
-    // clears review only if status is not a review state
-    reviewActive = statusValue === "review_ready";
-    if (!reviewActive) reviewResolvedAt = new Date().toISOString();
-    if (reviewActive) reviewOpenedAt = occurredAt;
-  } else if (eventType === "reply_sent" || eventType === "review_resolved") {
-    reviewActive = false;
-    reviewResolvedAt = new Date().toISOString();
-  } else {
-    reviewActive = statusValue === "review_ready";
-  }
+  // Only chat_snapshot / chat_scanned events are accepted now.
+  // Review state is purely a function of the current status value.
+  const reviewActive: boolean = statusValue === "review_ready";
+  const reviewResolvedAt: string | null = null;
+  const reviewOpenedAt: string | null = null;
 
   const headers = {
     apikey: SUPABASE_SERVICE_ROLE_KEY,
