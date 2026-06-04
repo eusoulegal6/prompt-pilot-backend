@@ -184,9 +184,20 @@ serve(async (req) => {
   const snapshot = (body.snapshot && typeof body.snapshot === "object" && !Array.isArray(body.snapshot))
     ? (body.snapshot as Record<string, unknown>)
     : null;
+  const scan = (body.scan && typeof body.scan === "object" && !Array.isArray(body.scan))
+    ? (body.scan as Record<string, unknown>)
+    : null;
 
   if (eventType === "chat_snapshot" && !snapshot) {
     return jsonResponse({ ok: false, error: "snapshot is required for chat_snapshot events." }, 400);
+  }
+  if (eventType === "chat_scanned") {
+    if (!scan) {
+      return jsonResponse({ ok: false, error: "scan is required for chat_scanned events." }, 400);
+    }
+    if (!Array.isArray(scan.messages)) {
+      return jsonResponse({ ok: false, error: "scan.messages must be an array." }, 400);
+    }
   }
 
   const threadId = truncate(str(thread.threadId), LIMITS.threadId);
