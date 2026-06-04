@@ -116,6 +116,66 @@ export type Database = {
         }
         Relationships: []
       }
+      chat_snapshots: {
+        Row: {
+          ack: number | null
+          body: string | null
+          captured_at: string
+          created_at: string
+          extension_version: string | null
+          from_me: boolean | null
+          has_reaction: boolean | null
+          id: number
+          is_forwarded: boolean | null
+          msg_timestamp: number | null
+          msg_type: string | null
+          provider: string
+          raw_payload: Json | null
+          source: string | null
+          thread_id: string
+          unread_count: number | null
+          user_id: string
+        }
+        Insert: {
+          ack?: number | null
+          body?: string | null
+          captured_at?: string
+          created_at?: string
+          extension_version?: string | null
+          from_me?: boolean | null
+          has_reaction?: boolean | null
+          id?: number
+          is_forwarded?: boolean | null
+          msg_timestamp?: number | null
+          msg_type?: string | null
+          provider?: string
+          raw_payload?: Json | null
+          source?: string | null
+          thread_id: string
+          unread_count?: number | null
+          user_id: string
+        }
+        Update: {
+          ack?: number | null
+          body?: string | null
+          captured_at?: string
+          created_at?: string
+          extension_version?: string | null
+          from_me?: boolean | null
+          has_reaction?: boolean | null
+          id?: number
+          is_forwarded?: boolean | null
+          msg_timestamp?: number | null
+          msg_type?: string | null
+          provider?: string
+          raw_payload?: Json | null
+          source?: string | null
+          thread_id?: string
+          unread_count?: number | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       extension_pair_codes: {
         Row: {
           code: string
@@ -341,6 +401,7 @@ export type Database = {
           last_handled_message_key: string
           last_opened_at: string | null
           last_sent_at: string | null
+          last_snapshot: Json | null
           latest_message: string | null
           needs_human_review: boolean
           preview: string | null
@@ -353,6 +414,15 @@ export type Database = {
           review_resolved_at: string | null
           review_summary: string
           sender: string | null
+          snapshot_ack: number | null
+          snapshot_body: string | null
+          snapshot_captured_at: string | null
+          snapshot_from_me: boolean | null
+          snapshot_has_reaction: boolean | null
+          snapshot_is_forwarded: boolean | null
+          snapshot_msg_timestamp: number | null
+          snapshot_msg_type: string | null
+          snapshot_unread_count: number | null
           source: string | null
           source_url: string | null
           status_value: string
@@ -390,6 +460,7 @@ export type Database = {
           last_handled_message_key?: string
           last_opened_at?: string | null
           last_sent_at?: string | null
+          last_snapshot?: Json | null
           latest_message?: string | null
           needs_human_review?: boolean
           preview?: string | null
@@ -402,6 +473,15 @@ export type Database = {
           review_resolved_at?: string | null
           review_summary?: string
           sender?: string | null
+          snapshot_ack?: number | null
+          snapshot_body?: string | null
+          snapshot_captured_at?: string | null
+          snapshot_from_me?: boolean | null
+          snapshot_has_reaction?: boolean | null
+          snapshot_is_forwarded?: boolean | null
+          snapshot_msg_timestamp?: number | null
+          snapshot_msg_type?: string | null
+          snapshot_unread_count?: number | null
           source?: string | null
           source_url?: string | null
           status_value?: string
@@ -439,6 +519,7 @@ export type Database = {
           last_handled_message_key?: string
           last_opened_at?: string | null
           last_sent_at?: string | null
+          last_snapshot?: Json | null
           latest_message?: string | null
           needs_human_review?: boolean
           preview?: string | null
@@ -451,6 +532,15 @@ export type Database = {
           review_resolved_at?: string | null
           review_summary?: string
           sender?: string | null
+          snapshot_ack?: number | null
+          snapshot_body?: string | null
+          snapshot_captured_at?: string | null
+          snapshot_from_me?: boolean | null
+          snapshot_has_reaction?: boolean | null
+          snapshot_is_forwarded?: boolean | null
+          snapshot_msg_timestamp?: number | null
+          snapshot_msg_type?: string | null
+          snapshot_unread_count?: number | null
           source?: string | null
           source_url?: string | null
           status_value?: string
