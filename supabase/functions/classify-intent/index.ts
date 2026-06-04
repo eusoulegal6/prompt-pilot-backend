@@ -121,6 +121,9 @@ async function resolveUserId(req: Request, supabaseUrl: string, serviceRoleKey: 
   const match = authHeader.match(/^Bearer\s+(.+)$/i);
   if (!match) return null;
   const token = match[1];
+  // Internal service-role call: trusted callers (other edge functions) may pass
+  // the service-role key as bearer; the user_id is then taken from the request body.
+  if (token === serviceRoleKey) return "__internal__";
   if (token.startsWith("ext_")) {
     const raw = token.slice(4);
     if (!raw) return null;
