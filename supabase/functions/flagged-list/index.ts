@@ -198,7 +198,146 @@ serve(async (req) => {
       return jsonResponse({ error: "Query failed" }, 502);
     }
     const items = await res.json();
-    return jsonResponse({ ok: true, items: Array.isArray(items) ? items : [] });
+    const itemList: Array<Record<string, unknown>> = Array.isArray(items) ? items : [];
+
+    // Enrich each thread with recent messages from chat_snapshots + latest scan.
+    if (itemList.length > 0) {
+      const threadIds = Array.from(new Set(itemList.map((i) => String(i.thread_id))));
+      const inList = threadIds.map((t) => `"${t.replace(/"/g, '\\"')}"`).join(",");
+
+      // Pull up to 200 most recent snapshots across these threads (≈ up to ~20/thread for 10 threads).
+      const snapParams = new URLSearchParams();
+      snapParams.set("user_id", `eq.${userId}`);
+      snapParams.set("thread_id", `in.(${inList})`);
+      snapParams.set("select", "thread_id,captured_at,from_me,body,msg_type");
+      snapParams.set("order", "captured_at.desc");
+      snapParams.set("limit", String(Math.min(500, threadIds.length * 25)));
+      const snapUrl = `${SUPABASE_URL}/rest/v1/chat_snapshots?${snapParams.toString()}`;
+
+      // Latest scan per thread (we'll dedupe client-side, take first per thread_id).
+      const scanParams = new URLSearchParams();
+      scanParams.set("user_id", `eq.${userId}`);
+      scanParams.set("thread_id", `in.(${inList})`);
+      scanParams.set("select", "thread_id,captured_at,message_count,messages");
+      scanParams.set("order", "captured_at.desc");
+      scanParams.set("limit", String(threadIds.length * 3));
+      const scanUrl = `${SUPABASE_URL}/rest/v1/chat_scans?${scanParams.toString()}`;
+
+      const headers = {
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      };
+
+      const [snapRes, scanRes] = await Promise.all([
+        fetch(snapUrl, { headers }),
+        fetch(scanUrl, { headers }),
+      ]);
+
+      const snapRows: Array<{
+        thread_id: string;
+        captured_at: string;
+        from_me: boolean | null;
+        body: string | null;
+        msg_type: string | null;
+      }> = snapRes.ok ? await snapRes.json() : [];
+      const scanRows: Array<{
+        thread_id: string;
+        captured_at: string;
+        message_count: number | null;
+        messages: unknown;
+      }> = scanRes.ok ? await scanRes.json() : [];
+
+      const snapsByThread = new Map<string, typeof snapRows>();
+      for (const row of snapRows) {
+        const list = snapsByThread.get(row.thread_id) ?? [];
+        if (list.length < 20) list.push(row);
+        snapsByThread.set(row.thread_id, list);
+      }
+
+      const latestScanByThread = new Map<string, (typeof scanRows)[number]>();
+      for (const row of scanRows) {
+        if (!latestScanByThread.has(row.thread_id)) latestScanByThread.set(row.thread_id, row);
+      }
+
+      type RecentMsg = {
+        body: string;
+        from_me: boolean;
+        captured_at: string;
+        msg_type: string | null;
+        source: "snapshot" | "scan";
+      };
+
+      const normalizeScanMessages = (raw: unknown): RecentMsg[] => {
+        if (!Array.isArray(raw)) return [];
+        const out: RecentMsg[] = [];
+        for (const m of raw) {
+          if (!m || typeof m !== "object") continue;
+          const obj = m as Record<string, unknown>;
+          const body = typeof obj.body === "string"
+            ? obj.body
+            : typeof obj.text === "string"
+              ? obj.text
+              : "";
+          if (!body.trim()) continue;
+          const tsRaw = obj.timestamp ?? obj.captured_at ?? obj.t;
+          let captured_at = "";
+          if (typeof tsRaw === "number") {
+            captured_at = new Date(tsRaw < 1e12 ? tsRaw * 1000 : tsRaw).toISOString();
+          } else if (typeof tsRaw === "string") {
+            const d = new Date(tsRaw);
+            captured_at = isNaN(d.getTime()) ? "" : d.toISOString();
+          }
+          out.push({
+            body,
+            from_me: Boolean(obj.fromMe ?? obj.from_me),
+            captured_at,
+            msg_type: typeof obj.type === "string" ? (obj.type as string) : null,
+            source: "scan",
+          });
+        }
+        return out;
+      };
+
+      for (const item of itemList) {
+        const tid = String(item.thread_id);
+        const snaps = snapsByThread.get(tid) ?? [];
+        const scan = latestScanByThread.get(tid);
+        const scanMsgs = scan ? normalizeScanMessages(scan.messages) : [];
+
+        const merged: RecentMsg[] = [
+          ...snaps
+            .filter((s) => (s.body ?? "").trim().length > 0)
+            .map((s) => ({
+              body: s.body as string,
+              from_me: Boolean(s.from_me),
+              captured_at: s.captured_at,
+              msg_type: s.msg_type,
+              source: "snapshot" as const,
+            })),
+          ...scanMsgs,
+        ];
+
+        // Dedupe by (body, from_me) keeping the most recent timestamp.
+        const byKey = new Map<string, RecentMsg>();
+        for (const m of merged) {
+          const key = `${m.from_me ? 1 : 0}|${m.body.trim().slice(0, 240)}`;
+          const existing = byKey.get(key);
+          if (!existing || (m.captured_at && m.captured_at > existing.captured_at)) {
+            byKey.set(key, m);
+          }
+        }
+
+        const recent = Array.from(byKey.values())
+          .sort((a, b) => (a.captured_at < b.captured_at ? 1 : -1))
+          .slice(0, 20)
+          .reverse(); // chronological order for display
+
+        item.recent_messages = recent;
+        if (scan) item.latest_scan_message_count = scan.message_count;
+      }
+    }
+
+    return jsonResponse({ ok: true, items: itemList });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`flagged-list ERROR user=${userId}: ${msg}`);
