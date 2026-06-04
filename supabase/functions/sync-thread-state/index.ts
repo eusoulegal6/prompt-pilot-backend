@@ -180,6 +180,13 @@ serve(async (req) => {
   const status = (body.status && typeof body.status === "object" && !Array.isArray(body.status))
     ? (body.status as Record<string, unknown>)
     : {};
+  const snapshot = (body.snapshot && typeof body.snapshot === "object" && !Array.isArray(body.snapshot))
+    ? (body.snapshot as Record<string, unknown>)
+    : null;
+
+  if (eventType === "chat_snapshot" && !snapshot) {
+    return jsonResponse({ ok: false, error: "snapshot is required for chat_snapshot events." }, 400);
+  }
 
   const threadId = truncate(str(thread.threadId), LIMITS.threadId);
   if (!threadId) {
@@ -275,6 +282,31 @@ serve(async (req) => {
     upsertBody.review_resolved_at = null;
   }
 
+  // Snapshot denormalization onto thread_states (chat_snapshot events)
+  let snapLastMessage: Record<string, unknown> = {};
+  if (snapshot) {
+    const capturedAt = isoOrNull(snapshot.capturedAt) ?? occurredAt;
+    const unreadCount = typeof snapshot.unreadCount === "number" ? snapshot.unreadCount : null;
+    const lm = (snapshot.lastMessage && typeof snapshot.lastMessage === "object" && !Array.isArray(snapshot.lastMessage))
+      ? (snapshot.lastMessage as Record<string, unknown>)
+      : {};
+    snapLastMessage = lm;
+    upsertBody.last_snapshot = snapshot;
+    upsertBody.snapshot_captured_at = capturedAt;
+    upsertBody.snapshot_unread_count = unreadCount;
+    upsertBody.snapshot_body = truncate(str(lm.body), LIMITS.text);
+    upsertBody.snapshot_from_me = typeof lm.fromMe === "boolean" ? lm.fromMe : null;
+    upsertBody.snapshot_msg_type = truncate(str(lm.type), LIMITS.short);
+    upsertBody.snapshot_ack = typeof lm.ack === "number" ? lm.ack : null;
+    upsertBody.snapshot_msg_timestamp = typeof lm.timestamp === "number" ? lm.timestamp : null;
+    upsertBody.snapshot_has_reaction = lm.hasReaction === true;
+    upsertBody.snapshot_is_forwarded = lm.isForwarded === true;
+    // Snapshots don't carry status — keep status_value sensible
+    if (eventType === "chat_snapshot" && !status.value) {
+      upsertBody.status_value = "queued";
+    }
+  }
+
   // Upsert by (user_id, provider, thread_id)
   const upsertUrl =
     `${SUPABASE_URL}/rest/v1/thread_states?on_conflict=user_id,provider,thread_id`;
@@ -323,6 +355,32 @@ serve(async (req) => {
         payload: body,
       }),
     }).catch((e) => console.warn("history insert failed:", (e as Error).message));
+  }
+
+  // Append to chat_snapshots time-series (best-effort)
+  if (snapshot) {
+    const lm = snapLastMessage;
+    fetch(`${SUPABASE_URL}/rest/v1/chat_snapshots`, {
+      method: "POST",
+      headers: { ...headers, Prefer: "return=minimal" },
+      body: JSON.stringify({
+        user_id: userId,
+        provider,
+        thread_id: threadId,
+        captured_at: isoOrNull(snapshot.capturedAt) ?? occurredAt,
+        unread_count: typeof snapshot.unreadCount === "number" ? snapshot.unreadCount : 0,
+        from_me: typeof lm.fromMe === "boolean" ? lm.fromMe : null,
+        body: truncate(str(lm.body), LIMITS.text),
+        msg_type: truncate(str(lm.type), LIMITS.short),
+        ack: typeof lm.ack === "number" ? lm.ack : null,
+        has_reaction: lm.hasReaction === true,
+        is_forwarded: lm.isForwarded === true,
+        msg_timestamp: typeof lm.timestamp === "number" ? lm.timestamp : null,
+        source,
+        extension_version: extensionVersion,
+        raw_payload: body,
+      }),
+    }).catch((e) => console.warn("chat_snapshot insert failed:", (e as Error).message));
   }
 
   console.log(
