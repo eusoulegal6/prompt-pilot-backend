@@ -432,6 +432,83 @@ serve(async (req) => {
     }).catch((e) => console.warn("chat_scan insert failed:", (e as Error).message));
   }
 
+  // Fire-and-forget intent classification when a new inbound message arrives.
+  // Triggers on chat_snapshot / chat_scanned events whose newest inbound content
+  // is fresher than the last intent_classified_at on the thread.
+  if (eventType === "chat_snapshot" || eventType === "chat_scanned") {
+    try {
+      // Get the previously stored classification timestamp from the upsert response.
+      // (We already read rows[0] above for threadStateId — refetch the field here cheaply.)
+      let priorClassifiedAt: string | null = null;
+      if (threadStateId) {
+        const readUrl = `${SUPABASE_URL}/rest/v1/thread_states?id=eq.${threadStateId}&select=intent_classified_at`;
+        const r = await fetch(readUrl, { headers });
+        if (r.ok) {
+          const arr = await r.json();
+          if (Array.isArray(arr) && arr[0]) priorClassifiedAt = arr[0].intent_classified_at ?? null;
+        }
+      }
+
+      // Pick the freshest inbound message text + capture time.
+      let inboundText = "";
+      let inboundAt: string | null = null;
+      let contextText = "";
+
+      if (eventType === "chat_snapshot" && snapshot) {
+        const lm = snapLastMessage;
+        const fromMe = typeof lm.fromMe === "boolean" ? lm.fromMe : false;
+        if (!fromMe) {
+          inboundText = truncate(str(lm.body), LIMITS.text);
+          inboundAt = isoOrNull(snapshot.capturedAt) ?? occurredAt;
+        }
+      } else if (eventType === "chat_scanned" && Array.isArray(scanMessages)) {
+        // Walk newest→oldest, pick first inbound; collect prior ones as context.
+        const msgs = scanMessages as Array<Record<string, unknown>>;
+        const ctxParts: string[] = [];
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const m = msgs[i];
+          if (!m || typeof m !== "object") continue;
+          const fromMe = m.fromMe === true;
+          const txt = str(m.body);
+          if (!txt) continue;
+          if (!inboundText && !fromMe) {
+            inboundText = truncate(txt, LIMITS.text);
+            inboundAt = scanCapturedAt ?? occurredAt;
+          } else if (inboundText) {
+            ctxParts.push(`${fromMe ? "business" : "customer"}: ${txt.slice(0, 240)}`);
+            if (ctxParts.length >= 6) break;
+          }
+        }
+        contextText = ctxParts.reverse().join("\n");
+      }
+
+      const shouldClassify = Boolean(inboundText) &&
+        (!priorClassifiedAt || (inboundAt && new Date(inboundAt) > new Date(priorClassifiedAt)));
+
+      if (shouldClassify) {
+        fetch(`${SUPABASE_URL}/functions/v1/classify-intent`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            apikey: SUPABASE_SERVICE_ROLE_KEY,
+            Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+          },
+          body: JSON.stringify({
+            user_id: userId,
+            provider,
+            thread_id: threadId,
+            message: inboundText,
+            context: contextText,
+            source: eventType === "chat_scanned" ? "scan" : "snapshot",
+          }),
+        }).catch((e) => console.warn("classify-intent dispatch failed:", (e as Error).message));
+        console.log(`classify-intent dispatched user=${userId} thread=${threadId} event=${eventType}`);
+      }
+    } catch (e) {
+      console.warn("classify-intent gating failed:", (e as Error).message);
+    }
+  }
+
   console.log(
     `sync-thread-state OK user=${userId} provider=${provider} thread=${threadId} event=${eventType} status=${statusValue} review_active=${reviewActive}`,
   );
