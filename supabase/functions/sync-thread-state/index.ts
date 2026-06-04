@@ -225,7 +225,10 @@ serve(async (req) => {
   }
 
   const subject = truncate(str(thread.subject), LIMITS.text);
-  const sender = truncate(str(thread.sender), LIMITS.text);
+  let sender = truncate(str(thread.sender), LIMITS.text);
+  if (!sender) {
+    sender = truncate(deriveSenderFromThreadId(threadId), LIMITS.text);
+  }
   const latestMessage = truncate(str(thread.latestMessage), LIMITS.text);
   const preview = truncate(str(thread.preview), LIMITS.preview);
   const unread = bool(thread.unread);
