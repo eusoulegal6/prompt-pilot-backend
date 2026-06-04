@@ -319,6 +319,24 @@ serve(async (req) => {
     }
   }
 
+  // Scan denormalization onto thread_states (chat_scanned events)
+  let scanMessages: unknown[] = [];
+  let scanCapturedAt: string | null = null;
+  let scanMessageCount = 0;
+  if (scan) {
+    scanCapturedAt = isoOrNull(scan.capturedAt) ?? occurredAt;
+    scanMessages = Array.isArray(scan.messages) ? scan.messages : [];
+    scanMessageCount = typeof scan.messageCount === "number"
+      ? scan.messageCount
+      : scanMessages.length;
+    upsertBody.last_scan = scan;
+    upsertBody.scan_captured_at = scanCapturedAt;
+    upsertBody.scan_message_count = scanMessageCount;
+    if (eventType === "chat_scanned" && !status.value) {
+      upsertBody.status_value = "queued";
+    }
+  }
+
   // Upsert by (user_id, provider, thread_id)
   const upsertUrl =
     `${SUPABASE_URL}/rest/v1/thread_states?on_conflict=user_id,provider,thread_id`;
