@@ -116,6 +116,48 @@ export type Database = {
         }
         Relationships: []
       }
+      chat_scans: {
+        Row: {
+          captured_at: string
+          created_at: string
+          extension_version: string | null
+          id: number
+          message_count: number
+          messages: Json
+          provider: string
+          raw_payload: Json | null
+          source: string | null
+          thread_id: string
+          user_id: string
+        }
+        Insert: {
+          captured_at?: string
+          created_at?: string
+          extension_version?: string | null
+          id?: number
+          message_count?: number
+          messages?: Json
+          provider?: string
+          raw_payload?: Json | null
+          source?: string | null
+          thread_id: string
+          user_id: string
+        }
+        Update: {
+          captured_at?: string
+          created_at?: string
+          extension_version?: string | null
+          id?: number
+          message_count?: number
+          messages?: Json
+          provider?: string
+          raw_payload?: Json | null
+          source?: string | null
+          thread_id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       chat_snapshots: {
         Row: {
           ack: number | null
@@ -400,6 +442,7 @@ export type Database = {
           last_event_type: string | null
           last_handled_message_key: string
           last_opened_at: string | null
+          last_scan: Json | null
           last_sent_at: string | null
           last_snapshot: Json | null
           latest_message: string | null
@@ -413,6 +456,8 @@ export type Database = {
           review_reason: string
           review_resolved_at: string | null
           review_summary: string
+          scan_captured_at: string | null
+          scan_message_count: number | null
           sender: string | null
           snapshot_ack: number | null
           snapshot_body: string | null
@@ -459,6 +504,7 @@ export type Database = {
           last_event_type?: string | null
           last_handled_message_key?: string
           last_opened_at?: string | null
+          last_scan?: Json | null
           last_sent_at?: string | null
           last_snapshot?: Json | null
           latest_message?: string | null
@@ -472,6 +518,8 @@ export type Database = {
           review_reason?: string
           review_resolved_at?: string | null
           review_summary?: string
+          scan_captured_at?: string | null
+          scan_message_count?: number | null
           sender?: string | null
           snapshot_ack?: number | null
           snapshot_body?: string | null
@@ -518,6 +566,7 @@ export type Database = {
           last_event_type?: string | null
           last_handled_message_key?: string
           last_opened_at?: string | null
+          last_scan?: Json | null
           last_sent_at?: string | null
           last_snapshot?: Json | null
           latest_message?: string | null
@@ -531,6 +580,8 @@ export type Database = {
           review_reason?: string
           review_resolved_at?: string | null
           review_summary?: string
+          scan_captured_at?: string | null
+          scan_message_count?: number | null
           sender?: string | null
           snapshot_ack?: number | null
           snapshot_body?: string | null
