@@ -339,8 +339,8 @@ serve(async (req) => {
     return jsonResponse({ error: "Server configuration error." }, 500);
   }
 
-  const userId = await resolveUserId(req, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-  if (!userId) return jsonResponse({ error: "Unauthorized" }, 401);
+  const resolved = await resolveUserId(req, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  if (!resolved) return jsonResponse({ error: "Unauthorized" }, 401);
 
   let body: Record<string, unknown>;
   try {
@@ -351,6 +351,16 @@ serve(async (req) => {
     body = raw as Record<string, unknown>;
   } catch {
     return jsonResponse({ error: "Invalid JSON body" }, 400);
+  }
+
+  // For internal service-role calls, take user_id from the request body.
+  let userId: string;
+  if (resolved === "__internal__") {
+    const candidate = str(body.user_id);
+    if (!candidate) return jsonResponse({ error: "user_id required for internal calls" }, 400);
+    userId = candidate;
+  } else {
+    userId = resolved;
   }
 
   // Backfill mode: classify existing thread_states rows that have no intent_category yet.
