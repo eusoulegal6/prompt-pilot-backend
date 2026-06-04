@@ -15,6 +15,7 @@ const ALLOWED_EVENTS = new Set([
   "review_resolved",
   "chat_snapshot",
   "send_ambiguous",
+  "chat_scanned",
 ]);
 
 const ALLOWED_STATUS = new Set([
@@ -183,9 +184,20 @@ serve(async (req) => {
   const snapshot = (body.snapshot && typeof body.snapshot === "object" && !Array.isArray(body.snapshot))
     ? (body.snapshot as Record<string, unknown>)
     : null;
+  const scan = (body.scan && typeof body.scan === "object" && !Array.isArray(body.scan))
+    ? (body.scan as Record<string, unknown>)
+    : null;
 
   if (eventType === "chat_snapshot" && !snapshot) {
     return jsonResponse({ ok: false, error: "snapshot is required for chat_snapshot events." }, 400);
+  }
+  if (eventType === "chat_scanned") {
+    if (!scan) {
+      return jsonResponse({ ok: false, error: "scan is required for chat_scanned events." }, 400);
+    }
+    if (!Array.isArray(scan.messages)) {
+      return jsonResponse({ ok: false, error: "scan.messages must be an array." }, 400);
+    }
   }
 
   const threadId = truncate(str(thread.threadId), LIMITS.threadId);
@@ -307,6 +319,24 @@ serve(async (req) => {
     }
   }
 
+  // Scan denormalization onto thread_states (chat_scanned events)
+  let scanMessages: unknown[] = [];
+  let scanCapturedAt: string | null = null;
+  let scanMessageCount = 0;
+  if (scan) {
+    scanCapturedAt = isoOrNull(scan.capturedAt) ?? occurredAt;
+    scanMessages = Array.isArray(scan.messages) ? scan.messages : [];
+    scanMessageCount = typeof scan.messageCount === "number"
+      ? scan.messageCount
+      : scanMessages.length;
+    upsertBody.last_scan = scan;
+    upsertBody.scan_captured_at = scanCapturedAt;
+    upsertBody.scan_message_count = scanMessageCount;
+    if (eventType === "chat_scanned" && !status.value) {
+      upsertBody.status_value = "queued";
+    }
+  }
+
   // Upsert by (user_id, provider, thread_id)
   const upsertUrl =
     `${SUPABASE_URL}/rest/v1/thread_states?on_conflict=user_id,provider,thread_id`;
@@ -381,6 +411,25 @@ serve(async (req) => {
         raw_payload: body,
       }),
     }).catch((e) => console.warn("chat_snapshot insert failed:", (e as Error).message));
+  }
+
+  // Append to chat_scans time-series (best-effort)
+  if (scan) {
+    fetch(`${SUPABASE_URL}/rest/v1/chat_scans`, {
+      method: "POST",
+      headers: { ...headers, Prefer: "return=minimal" },
+      body: JSON.stringify({
+        user_id: userId,
+        provider,
+        thread_id: threadId,
+        captured_at: scanCapturedAt ?? occurredAt,
+        message_count: scanMessageCount,
+        messages: scanMessages,
+        source,
+        extension_version: extensionVersion,
+        raw_payload: body,
+      }),
+    }).catch((e) => console.warn("chat_scan insert failed:", (e as Error).message));
   }
 
   console.log(
