@@ -160,19 +160,15 @@ serve(async (req) => {
     "thread_url",
   ].join(",");
 
-  // Surface anything the classifier flagged for human review, plus a safety net:
-  // - high-risk subcategories (complaint, refund, human-agent, unclear)
-  // - low-confidence classifications (< 0.55)
-  // - legacy rows without the new flag: misc, or support with confidence < 0.6
+  // Surface any thread that has been classified, plus anything flagged for review.
+  // Previously this filter only returned low-confidence / flagged rows, which hid
+  // confident classifications (e.g. appointment @ 0.98) from the dashboard.
   const orFilter =
     "or=(" +
     [
       "needs_human_review.eq.true",
-      "intent_subcategory.in.(complaint,refund_or_return,human_agent_request,unclear)",
-      "intent_confidence.lt.0.55",
-      "intent_category.eq.complaint",
-      "intent_category.eq.misc",
-      "and(intent_category.eq.support,intent_confidence.lt.0.6)",
+      "intent_category.not.is.null",
+      "intent_subcategory.not.is.null",
     ].join(",") +
     ")";
 
