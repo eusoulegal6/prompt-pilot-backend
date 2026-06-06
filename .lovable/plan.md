@@ -1,65 +1,57 @@
-# Pipeline: chat_snapshot + chat_scanned → Dashboard
+# Chat Sync Integrity Contract v2
 
-Make the snapshot/scan data captured by `sync-thread-state` the primary live feed in the web app, following the `flagged-list` pattern (auth-aware edge function + React component with polling + realtime).
+Update `sync-thread-state` and the database to honor the new extension contract: signed payloads, idempotent receipts, and per-message persistence.
 
-## 1. New edge function: `thread-activity`
+## 1. Database migration
 
-Path: `supabase/functions/thread-activity/index.ts`
+New tables:
 
-- Reuse the `resolveUserId` helper from `flagged-list` verbatim (JWT + `ext_` token + partner JWKS) so both web sessions and extension tokens work.
-- `GET /?health=1` → `{ ok: true, function: "thread-activity" }`.
-- `GET /?limit=20&thread_id=<optional>` returns:
-  ```json
-  {
-    "ok": true,
-    "threads": [ /* thread_states rows, latest snapshot+scan denormalized */ ],
-    "snapshots": [ /* chat_snapshots time-series, newest first */ ],
-    "scans": [ /* chat_scans time-series, newest first, messages truncated */ ]
-  }
-  ```
-- Query strategy (service-role REST, filtered by `user_id`):
-  - `thread_states`: select thread_id, provider, sender, subject, thread_url, snapshot_*, scan_*, last_snapshot, last_scan, updated_at — order by `snapshot_captured_at desc nulls last`, limit N.
-  - `chat_snapshots`: select all columns, order `captured_at desc`, limit N.
-  - `chat_scans`: select metadata + `messages` truncated to last 5 entries (slice server-side to keep payload small), order `captured_at desc`, limit N.
-- If `thread_id` query param is set, filter all three queries by it.
-- All responses include CORS headers + `Cache-Control: no-store`.
+- `sync_events`
+  - `event_id text primary key` (the `eventId` from the body, e.g. `event:<uuid>`)
+  - `user_id uuid`, `provider text`, `thread_id text`
+  - `event_type text` (`chat_snapshot` | `chat_scanned`)
+  - `scan_id text`, `schema_version int`
+  - `payload_sha256 text not null`
+  - `stored_message_count int`
+  - `received_at timestamptz default now()`
+  - unique constraint on `event_id`; index on `(user_id, thread_id)`
 
-## 2. Frontend component: `ThreadActivitySection`
+- `scan_messages` (per-message identity for `chat_scanned`)
+  - `id uuid pk`
+  - `user_id`, `provider`, `thread_id`
+  - `event_id text references sync_events(event_id) on delete cascade`
+  - `message_id text` (nullable — degraded input)
+  - `ordinal int`, `source_model_index int`
+  - `sender_id text`, `from_me bool`, `msg_timestamp bigint`
+  - `raw_body text`, `normalized_body text`
+  - `degraded bool` (true when `message_id` is null)
+  - unique `(user_id, thread_id, message_id)` where `message_id is not null`
+  - unique `(event_id, ordinal)` so re-posting the same event is a no-op
+  - GRANTs + RLS (owner only); service_role full access
 
-Path: `src/components/ThreadActivitySection.tsx`
+## 2. Edge function `sync-thread-state`
 
-- Mirrors `FlaggedReviewSection` structure: `fetch` + `setInterval` poll (15s) + Supabase realtime channel on `chat_snapshots` and `chat_scans` INSERT (filtered by `user_id`) to trigger reload.
-- Two stacked panels inside the card:
-  1. **Live snapshots** — list of latest `chat_snapshots` (sender, body preview, unread count badge, from_me indicator, captured_at).
-  2. **Recent scans** — list of latest `chat_scans` (sender/thread, message_count, captured_at, expandable accordion to show truncated `messages[]`).
-- Uses semantic Tailwind tokens (no raw colors), `lucide-react` icons (`Activity`, `MessageSquare`, `ScanLine`).
-- Header refresh button + spinner identical to `FlaggedReviewSection`.
+Behavior changes:
 
-## 3. Dashboard wiring
-
-`src/pages/Dashboard.tsx`: import and render `<ThreadActivitySection />` directly above `<FlaggedReviewSection />` so the live pipeline is the first thing users see.
-
-## 4. Realtime publication
-
-Migration adds:
-```sql
-ALTER PUBLICATION supabase_realtime ADD TABLE public.chat_snapshots;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.chat_scans;
-```
-Plus `REPLICA IDENTITY FULL` on both so updates carry full rows (no schema change otherwise — RLS already permits authenticated user reads of own rows).
-
-## 5. Handoff docs
-
-Update `sync-thread-state-handoff.md` with a new "Consumers" section pointing to `thread-activity` + `ThreadActivitySection.tsx`, so the next agent knows the read path is now live.
-
-## Out of scope (call out, don't build)
-
-- Thread Inspector drawer (full scan history per thread) — defer until users ask.
-- Pagination beyond `limit` query param — current cap (50) is enough for the dashboard card.
-- Surfacing snapshots/scans inside the flagged list — keep concerns separated.
+1. **Header capture**: read `x-idempotency-key`, `x-payload-sha256`, `x-schema-version`.
+2. **Hash verify**: clone body, drop top-level `payloadSha256`, drop `integrity.payloadSha256` (keep other integrity fields), recursively sort object keys, JSON.stringify compact, SHA-256 → lowercase hex. Reject `400` if computed hash ≠ body `payloadSha256` ≠ header `x-payload-sha256`.
+3. **Idempotency**:
+   - Look up `sync_events.event_id`.
+   - Same `event_id` + same `payload_sha256` → return the stored receipt (no re-write).
+   - Same `event_id` + different hash → `409`.
+   - Otherwise insert a new `sync_events` row.
+4. **Existing thread_states upsert** continues as today.
+5. **chat_scanned message persistence**: for each `scan.messages[i]`, insert a `scan_messages` row with `ordinal = i` and the contract fields. Use upsert on `(event_id, ordinal)` so retries are safe. Count inserted rows for `storedMessageCount`.
+6. **Verified receipt**:
+   ```json
+   { "ok": true, "eventId": "...", "payloadSha256": "...", "storedMessageCount": N }
+   ```
+   `storedMessageCount` is included only for `chat_scanned`. Only returned after DB commits succeed; on partial failure return `500` and do not persist `sync_events`.
+7. Backwards compatibility: if `schemaVersion` is missing and there's no `payloadSha256`, fall through to legacy behavior so older extension installs keep working (logged as `legacy_unverified`).
 
 ## Technical notes
 
-- `chat_scans.messages` is unbounded jsonb; the edge function slices to last 5 messages before returning to keep the payload under a few KB per row.
-- The component dedupes snapshots by `thread_id` for the "Live snapshots" panel (latest wins), same dedupe pattern `FlaggedReviewSection` uses for sender.
-- No new secrets, no DB schema changes beyond the realtime publication.
+- Canonical JSON: implement a small `canonicalize(obj)` that sorts keys recursively, preserves array order, stringifies with `JSON.stringify` (no spaces). Web Crypto `crypto.subtle.digest("SHA-256", ...)` for hashing.
+- All new writes use the service-role REST calls already used in the function.
+- `messageId` may be missing for some WhatsApp messages — store with `degraded=true`, do not collapse by text.
+- No frontend changes required.

@@ -359,6 +359,107 @@ export type Database = {
         }
         Relationships: []
       }
+      scan_messages: {
+        Row: {
+          created_at: string
+          degraded: boolean
+          event_id: string
+          from_me: boolean | null
+          id: string
+          message_id: string | null
+          msg_timestamp: number | null
+          normalized_body: string | null
+          ordinal: number
+          provider: string
+          raw_body: string | null
+          sender_id: string | null
+          source_model_index: number | null
+          thread_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          degraded?: boolean
+          event_id: string
+          from_me?: boolean | null
+          id?: string
+          message_id?: string | null
+          msg_timestamp?: number | null
+          normalized_body?: string | null
+          ordinal: number
+          provider?: string
+          raw_body?: string | null
+          sender_id?: string | null
+          source_model_index?: number | null
+          thread_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          degraded?: boolean
+          event_id?: string
+          from_me?: boolean | null
+          id?: string
+          message_id?: string | null
+          msg_timestamp?: number | null
+          normalized_body?: string | null
+          ordinal?: number
+          provider?: string
+          raw_body?: string | null
+          sender_id?: string | null
+          source_model_index?: number | null
+          thread_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "scan_messages_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "sync_events"
+            referencedColumns: ["event_id"]
+          },
+        ]
+      }
+      sync_events: {
+        Row: {
+          event_id: string
+          event_type: string
+          payload_sha256: string
+          provider: string
+          received_at: string
+          scan_id: string | null
+          schema_version: number | null
+          stored_message_count: number | null
+          thread_id: string
+          user_id: string
+        }
+        Insert: {
+          event_id: string
+          event_type: string
+          payload_sha256: string
+          provider?: string
+          received_at?: string
+          scan_id?: string | null
+          schema_version?: number | null
+          stored_message_count?: number | null
+          thread_id: string
+          user_id: string
+        }
+        Update: {
+          event_id?: string
+          event_type?: string
+          payload_sha256?: string
+          provider?: string
+          received_at?: string
+          scan_id?: string | null
+          schema_version?: number | null
+          stored_message_count?: number | null
+          thread_id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       thread_state_history: {
         Row: {
           backend_decision: string
