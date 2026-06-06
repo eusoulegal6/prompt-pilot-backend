@@ -607,25 +607,58 @@ serve(async (req) => {
         };
       });
 
-      const msgInsertRes = await fetch(
-        `${SUPABASE_URL}/rest/v1/scan_messages?on_conflict=event_id,ordinal`,
-        {
-          method: "POST",
-          headers: { ...headers, Prefer: "resolution=merge-duplicates,return=minimal" },
-          body: JSON.stringify(rowsToInsert),
-        },
+      // Pre-filter out messages whose message_id already exists for this
+      // (user_id, thread_id). The partial unique index on (user_id, thread_id,
+      // message_id) WHERE message_id IS NOT NULL prevents duplicates across
+      // events, and PostgREST can't on_conflict against a partial index, so we
+      // filter client-side. Degraded rows (no message_id) are always inserted
+      // and de-duped by (event_id, ordinal) for safe replays.
+      const candidateIds = Array.from(
+        new Set(rowsToInsert.map((r) => r.message_id).filter((x): x is string => !!x)),
       );
-      if (!msgInsertRes.ok) {
-        const text = (await msgInsertRes.text()).slice(0, 300);
-        console.error(`scan_messages insert failed status=${msgInsertRes.status} body=${text}`);
-        // Roll back the sync_events row so a retry can succeed cleanly.
-        await fetch(
-          `${SUPABASE_URL}/rest/v1/sync_events?event_id=eq.${encodeURIComponent(eventId)}`,
-          { method: "DELETE", headers: { ...headers, Prefer: "return=minimal" } },
-        ).catch(() => {});
-        return jsonResponse({ ok: false, error: "Failed to persist scan messages." }, 500);
+      const existingIds = new Set<string>();
+      if (candidateIds.length > 0) {
+        const inList = candidateIds.map((id) => `"${id.replace(/"/g, '\\"')}"`).join(",");
+        const lookupUrl =
+          `${SUPABASE_URL}/rest/v1/scan_messages?user_id=eq.${userId}&thread_id=eq.${encodeURIComponent(threadId)}&message_id=in.(${encodeURIComponent(inList)})&select=message_id`;
+        const r = await fetch(lookupUrl, { headers });
+        if (r.ok) {
+          const arr = await r.json();
+          if (Array.isArray(arr)) {
+            for (const row of arr) {
+              if (row && typeof row.message_id === "string") existingIds.add(row.message_id);
+            }
+          }
+        }
       }
-      storedMessageCount = rowsToInsert.length;
+      const rowsFiltered = rowsToInsert.filter(
+        (r) => !r.message_id || !existingIds.has(r.message_id),
+      );
+
+      if (rowsFiltered.length > 0) {
+        const msgInsertRes = await fetch(
+          `${SUPABASE_URL}/rest/v1/scan_messages?on_conflict=event_id,ordinal`,
+          {
+            method: "POST",
+            headers: { ...headers, Prefer: "resolution=merge-duplicates,return=minimal" },
+            body: JSON.stringify(rowsFiltered),
+          },
+        );
+        if (!msgInsertRes.ok) {
+          const text = (await msgInsertRes.text()).slice(0, 300);
+          console.error(`scan_messages insert failed status=${msgInsertRes.status} body=${text}`);
+          // Roll back the sync_events row so a retry can succeed cleanly.
+          await fetch(
+            `${SUPABASE_URL}/rest/v1/sync_events?event_id=eq.${encodeURIComponent(eventId)}`,
+            { method: "DELETE", headers: { ...headers, Prefer: "return=minimal" } },
+          ).catch(() => {});
+          return jsonResponse({ ok: false, error: "Failed to persist scan messages." }, 500);
+        }
+      }
+      storedMessageCount = rowsFiltered.length;
+      console.log(
+        `scan_messages persisted=${storedMessageCount} skipped_existing=${rowsToInsert.length - rowsFiltered.length} event=${eventId}`,
+      );
 
       // Patch the count back onto sync_events for replay receipts.
       fetch(
