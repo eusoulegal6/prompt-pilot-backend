@@ -4,7 +4,7 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
+    "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version, x-idempotency-key, x-payload-sha256, x-schema-version",
   "Access-Control-Max-Age": "86400",
 };
 
@@ -103,6 +103,33 @@ async function sha256Hex(input: string): Promise<string> {
     .join("");
 }
 
+// Canonical JSON for hash verification (json-sort-v1):
+// - recursively sort object keys lexicographically
+// - preserve array order
+// - compact stringify (no whitespace)
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(obj).sort()) out[k] = canonicalize(obj[k]);
+    return out;
+  }
+  return value;
+}
+
+async function computePayloadHash(body: Record<string, unknown>): Promise<string> {
+  // Clone shallowly + strip the two hash fields per the contract.
+  const clone: Record<string, unknown> = { ...body };
+  delete clone.payloadSha256;
+  if (clone.integrity && typeof clone.integrity === "object" && !Array.isArray(clone.integrity)) {
+    const integrity = { ...(clone.integrity as Record<string, unknown>) };
+    delete integrity.payloadSha256;
+    clone.integrity = integrity;
+  }
+  return await sha256Hex(JSON.stringify(canonicalize(clone)));
+}
+
 async function resolveUserId(
   req: Request,
   supabaseUrl: string,
@@ -183,6 +210,62 @@ serve(async (req) => {
     return jsonResponse({ ok: false, error: "Invalid eventType." }, 400);
   }
 
+  // --- Integrity contract v2 ---------------------------------------------
+  const headerHash = (req.headers.get("x-payload-sha256") || "").trim().toLowerCase();
+  const headerEventId = (req.headers.get("x-idempotency-key") || "").trim();
+  const headerSchemaVersion = parseInt(req.headers.get("x-schema-version") || "", 10);
+
+  const schemaVersion = typeof body.schemaVersion === "number"
+    ? (body.schemaVersion as number)
+    : (Number.isFinite(headerSchemaVersion) ? headerSchemaVersion : 0);
+  const eventId = truncate(str(body.eventId) || headerEventId, 200);
+  const scanId = truncate(str(body.scanId), 200);
+  const bodyHash = str(body.payloadSha256).toLowerCase();
+  const integrityObj = (body.integrity && typeof body.integrity === "object" && !Array.isArray(body.integrity))
+    ? (body.integrity as Record<string, unknown>)
+    : null;
+  const integrityHash = integrityObj ? str(integrityObj.payloadSha256).toLowerCase() : "";
+
+  const isV2 = schemaVersion >= 2 || Boolean(bodyHash) || Boolean(eventId);
+  let verified = false;
+  let computedHash = "";
+
+  if (isV2) {
+    if (!eventId) {
+      return jsonResponse({ ok: false, error: "eventId is required for schemaVersion>=2." }, 400);
+    }
+    if (!bodyHash) {
+      return jsonResponse({ ok: false, error: "payloadSha256 is required for schemaVersion>=2." }, 400);
+    }
+    if (integrityHash && integrityHash !== bodyHash) {
+      return jsonResponse({ ok: false, error: "integrity.payloadSha256 does not match payloadSha256." }, 400);
+    }
+    if (headerHash && headerHash !== bodyHash) {
+      return jsonResponse({ ok: false, error: "x-payload-sha256 header does not match payloadSha256." }, 400);
+    }
+    try {
+      computedHash = await computePayloadHash(body);
+    } catch (e) {
+      console.error("hash compute failed:", (e as Error).message);
+      return jsonResponse({ ok: false, error: "Failed to verify payload hash." }, 400);
+    }
+    if (computedHash !== bodyHash) {
+      return jsonResponse({
+        ok: false,
+        error: "Computed payload hash does not match payloadSha256.",
+        expected: bodyHash,
+        computed: computedHash,
+      }, 400);
+    }
+    if (headerEventId && headerEventId !== eventId) {
+      return jsonResponse({ ok: false, error: "x-idempotency-key does not match body eventId." }, 400);
+    }
+    verified = true;
+  } else {
+    console.log("sync-thread-state legacy_unverified event received (no schemaVersion/payloadSha256)");
+  }
+  // ------------------------------------------------------------------------
+
   const provider = str(body.provider, "whatsapp").toLowerCase() || "whatsapp";
   const queueScope = str(body.queueScope, "all");
   const extensionVersion = truncate(str(body.extensionVersion), LIMITS.short);
@@ -257,6 +340,45 @@ serve(async (req) => {
     Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
     "Content-Type": "application/json",
   };
+
+  // --- Idempotency: short-circuit if this eventId was already stored -----
+  if (verified && eventId) {
+    try {
+      const lookupUrl =
+        `${SUPABASE_URL}/rest/v1/sync_events?event_id=eq.${encodeURIComponent(eventId)}&select=event_id,payload_sha256,stored_message_count,event_type,user_id`;
+      const r = await fetch(lookupUrl, { headers });
+      if (r.ok) {
+        const rows = await r.json();
+        if (Array.isArray(rows) && rows.length > 0) {
+          const existing = rows[0] as Record<string, unknown>;
+          if (existing.user_id && existing.user_id !== userId) {
+            return jsonResponse({ ok: false, error: "eventId belongs to another account." }, 409);
+          }
+          if ((existing.payload_sha256 as string) !== bodyHash) {
+            return jsonResponse({
+              ok: false,
+              error: "eventId already used with a different payload hash.",
+              eventId,
+            }, 409);
+          }
+          // Same event + same hash: replay the original receipt.
+          const receipt: Record<string, unknown> = {
+            ok: true,
+            eventId,
+            payloadSha256: bodyHash,
+            replay: true,
+          };
+          if (existing.event_type === "chat_scanned") {
+            receipt.storedMessageCount = (existing.stored_message_count as number) ?? 0;
+          }
+          return jsonResponse(receipt);
+        }
+      }
+    } catch (e) {
+      console.warn("idempotency lookup failed:", (e as Error).message);
+    }
+  }
+  // ----------------------------------------------------------------------
 
   const upsertBody: Record<string, unknown> = {
     user_id: userId,
@@ -432,6 +554,92 @@ serve(async (req) => {
     }).catch((e) => console.warn("chat_scan insert failed:", (e as Error).message));
   }
 
+  // --- Verified persistence: sync_events + per-message identity ---------
+  let storedMessageCount = 0;
+  if (verified) {
+    // 1) Insert the sync_events row first (FK target for scan_messages).
+    const eventInsertRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/sync_events`,
+      {
+        method: "POST",
+        headers: { ...headers, Prefer: "return=minimal" },
+        body: JSON.stringify({
+          event_id: eventId,
+          user_id: userId,
+          provider,
+          thread_id: threadId,
+          event_type: eventType,
+          scan_id: scanId || null,
+          schema_version: schemaVersion,
+          payload_sha256: bodyHash,
+          stored_message_count: null,
+        }),
+      },
+    );
+    if (!eventInsertRes.ok) {
+      const text = (await eventInsertRes.text()).slice(0, 300);
+      console.error(`sync_events insert failed status=${eventInsertRes.status} body=${text}`);
+      return jsonResponse({ ok: false, error: "Failed to persist sync event." }, 500);
+    }
+
+    // 2) For chat_scanned, persist per-message identity rows.
+    if (eventType === "chat_scanned" && Array.isArray(scanMessages) && scanMessages.length > 0) {
+      const rowsToInsert = scanMessages.map((m, i) => {
+        const msg = (m && typeof m === "object") ? (m as Record<string, unknown>) : {};
+        const messageIdRaw = truncate(str(msg.messageId) || str(msg.id), LIMITS.msgKey);
+        const messageId = messageIdRaw || null;
+        const rawBody = truncate(str(msg.body) || str(msg.rawBody), LIMITS.text);
+        const normalized = truncate(str(msg.normalizedBody) || rawBody, LIMITS.text);
+        return {
+          user_id: userId,
+          provider,
+          thread_id: threadId,
+          event_id: eventId,
+          message_id: messageId,
+          ordinal: typeof msg.ordinal === "number" ? msg.ordinal : i,
+          source_model_index: typeof msg.sourceModelIndex === "number" ? msg.sourceModelIndex : null,
+          sender_id: truncate(str(msg.senderId), LIMITS.text) || null,
+          from_me: typeof msg.fromMe === "boolean" ? msg.fromMe : null,
+          msg_timestamp: typeof msg.timestamp === "number" ? msg.timestamp : null,
+          raw_body: rawBody,
+          normalized_body: normalized,
+          degraded: !messageId,
+        };
+      });
+
+      const msgInsertRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/scan_messages?on_conflict=event_id,ordinal`,
+        {
+          method: "POST",
+          headers: { ...headers, Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify(rowsToInsert),
+        },
+      );
+      if (!msgInsertRes.ok) {
+        const text = (await msgInsertRes.text()).slice(0, 300);
+        console.error(`scan_messages insert failed status=${msgInsertRes.status} body=${text}`);
+        // Roll back the sync_events row so a retry can succeed cleanly.
+        await fetch(
+          `${SUPABASE_URL}/rest/v1/sync_events?event_id=eq.${encodeURIComponent(eventId)}`,
+          { method: "DELETE", headers: { ...headers, Prefer: "return=minimal" } },
+        ).catch(() => {});
+        return jsonResponse({ ok: false, error: "Failed to persist scan messages." }, 500);
+      }
+      storedMessageCount = rowsToInsert.length;
+
+      // Patch the count back onto sync_events for replay receipts.
+      fetch(
+        `${SUPABASE_URL}/rest/v1/sync_events?event_id=eq.${encodeURIComponent(eventId)}`,
+        {
+          method: "PATCH",
+          headers: { ...headers, Prefer: "return=minimal" },
+          body: JSON.stringify({ stored_message_count: storedMessageCount }),
+        },
+      ).catch((e) => console.warn("sync_events count patch failed:", (e as Error).message));
+    }
+  }
+  // ----------------------------------------------------------------------
+
   // Fire-and-forget intent classification when a new inbound message arrives.
   // Triggers on chat_snapshot / chat_scanned events whose newest inbound content
   // is fresher than the last intent_classified_at on the thread.
@@ -542,5 +750,16 @@ serve(async (req) => {
     `sync-thread-state OK user=${userId} provider=${provider} thread=${threadId} event=${eventType} status=${statusValue} review_active=${reviewActive}`,
   );
 
-  return jsonResponse({ ok: true });
+  if (verified) {
+    const receipt: Record<string, unknown> = {
+      ok: true,
+      eventId,
+      payloadSha256: bodyHash,
+    };
+    if (eventType === "chat_scanned") {
+      receipt.storedMessageCount = storedMessageCount;
+    }
+    return jsonResponse(receipt);
+  }
+  return jsonResponse({ ok: true, legacy: true });
 });
