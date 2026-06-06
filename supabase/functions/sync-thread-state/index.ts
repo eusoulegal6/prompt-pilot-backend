@@ -103,6 +103,33 @@ async function sha256Hex(input: string): Promise<string> {
     .join("");
 }
 
+// Canonical JSON for hash verification (json-sort-v1):
+// - recursively sort object keys lexicographically
+// - preserve array order
+// - compact stringify (no whitespace)
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(obj).sort()) out[k] = canonicalize(obj[k]);
+    return out;
+  }
+  return value;
+}
+
+async function computePayloadHash(body: Record<string, unknown>): Promise<string> {
+  // Clone shallowly + strip the two hash fields per the contract.
+  const clone: Record<string, unknown> = { ...body };
+  delete clone.payloadSha256;
+  if (clone.integrity && typeof clone.integrity === "object" && !Array.isArray(clone.integrity)) {
+    const integrity = { ...(clone.integrity as Record<string, unknown>) };
+    delete integrity.payloadSha256;
+    clone.integrity = integrity;
+  }
+  return await sha256Hex(JSON.stringify(canonicalize(clone)));
+}
+
 async function resolveUserId(
   req: Request,
   supabaseUrl: string,
