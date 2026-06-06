@@ -210,6 +210,62 @@ serve(async (req) => {
     return jsonResponse({ ok: false, error: "Invalid eventType." }, 400);
   }
 
+  // --- Integrity contract v2 ---------------------------------------------
+  const headerHash = (req.headers.get("x-payload-sha256") || "").trim().toLowerCase();
+  const headerEventId = (req.headers.get("x-idempotency-key") || "").trim();
+  const headerSchemaVersion = parseInt(req.headers.get("x-schema-version") || "", 10);
+
+  const schemaVersion = typeof body.schemaVersion === "number"
+    ? (body.schemaVersion as number)
+    : (Number.isFinite(headerSchemaVersion) ? headerSchemaVersion : 0);
+  const eventId = truncate(str(body.eventId) || headerEventId, 200);
+  const scanId = truncate(str(body.scanId), 200);
+  const bodyHash = str(body.payloadSha256).toLowerCase();
+  const integrityObj = (body.integrity && typeof body.integrity === "object" && !Array.isArray(body.integrity))
+    ? (body.integrity as Record<string, unknown>)
+    : null;
+  const integrityHash = integrityObj ? str(integrityObj.payloadSha256).toLowerCase() : "";
+
+  const isV2 = schemaVersion >= 2 || Boolean(bodyHash) || Boolean(eventId);
+  let verified = false;
+  let computedHash = "";
+
+  if (isV2) {
+    if (!eventId) {
+      return jsonResponse({ ok: false, error: "eventId is required for schemaVersion>=2." }, 400);
+    }
+    if (!bodyHash) {
+      return jsonResponse({ ok: false, error: "payloadSha256 is required for schemaVersion>=2." }, 400);
+    }
+    if (integrityHash && integrityHash !== bodyHash) {
+      return jsonResponse({ ok: false, error: "integrity.payloadSha256 does not match payloadSha256." }, 400);
+    }
+    if (headerHash && headerHash !== bodyHash) {
+      return jsonResponse({ ok: false, error: "x-payload-sha256 header does not match payloadSha256." }, 400);
+    }
+    try {
+      computedHash = await computePayloadHash(body);
+    } catch (e) {
+      console.error("hash compute failed:", (e as Error).message);
+      return jsonResponse({ ok: false, error: "Failed to verify payload hash." }, 400);
+    }
+    if (computedHash !== bodyHash) {
+      return jsonResponse({
+        ok: false,
+        error: "Computed payload hash does not match payloadSha256.",
+        expected: bodyHash,
+        computed: computedHash,
+      }, 400);
+    }
+    if (headerEventId && headerEventId !== eventId) {
+      return jsonResponse({ ok: false, error: "x-idempotency-key does not match body eventId." }, 400);
+    }
+    verified = true;
+  } else {
+    console.log("sync-thread-state legacy_unverified event received (no schemaVersion/payloadSha256)");
+  }
+  // ------------------------------------------------------------------------
+
   const provider = str(body.provider, "whatsapp").toLowerCase() || "whatsapp";
   const queueScope = str(body.queueScope, "all");
   const extensionVersion = truncate(str(body.extensionVersion), LIMITS.short);
