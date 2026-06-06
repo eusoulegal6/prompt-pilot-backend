@@ -341,6 +341,45 @@ serve(async (req) => {
     "Content-Type": "application/json",
   };
 
+  // --- Idempotency: short-circuit if this eventId was already stored -----
+  if (verified && eventId) {
+    try {
+      const lookupUrl =
+        `${SUPABASE_URL}/rest/v1/sync_events?event_id=eq.${encodeURIComponent(eventId)}&select=event_id,payload_sha256,stored_message_count,event_type,user_id`;
+      const r = await fetch(lookupUrl, { headers });
+      if (r.ok) {
+        const rows = await r.json();
+        if (Array.isArray(rows) && rows.length > 0) {
+          const existing = rows[0] as Record<string, unknown>;
+          if (existing.user_id && existing.user_id !== userId) {
+            return jsonResponse({ ok: false, error: "eventId belongs to another account." }, 409);
+          }
+          if ((existing.payload_sha256 as string) !== bodyHash) {
+            return jsonResponse({
+              ok: false,
+              error: "eventId already used with a different payload hash.",
+              eventId,
+            }, 409);
+          }
+          // Same event + same hash: replay the original receipt.
+          const receipt: Record<string, unknown> = {
+            ok: true,
+            eventId,
+            payloadSha256: bodyHash,
+            replay: true,
+          };
+          if (existing.event_type === "chat_scanned") {
+            receipt.storedMessageCount = (existing.stored_message_count as number) ?? 0;
+          }
+          return jsonResponse(receipt);
+        }
+      }
+    } catch (e) {
+      console.warn("idempotency lookup failed:", (e as Error).message);
+    }
+  }
+  // ----------------------------------------------------------------------
+
   const upsertBody: Record<string, unknown> = {
     user_id: userId,
     provider,
