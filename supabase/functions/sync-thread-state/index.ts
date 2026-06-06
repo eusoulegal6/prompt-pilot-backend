@@ -554,6 +554,92 @@ serve(async (req) => {
     }).catch((e) => console.warn("chat_scan insert failed:", (e as Error).message));
   }
 
+  // --- Verified persistence: sync_events + per-message identity ---------
+  let storedMessageCount = 0;
+  if (verified) {
+    // 1) Insert the sync_events row first (FK target for scan_messages).
+    const eventInsertRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/sync_events`,
+      {
+        method: "POST",
+        headers: { ...headers, Prefer: "return=minimal" },
+        body: JSON.stringify({
+          event_id: eventId,
+          user_id: userId,
+          provider,
+          thread_id: threadId,
+          event_type: eventType,
+          scan_id: scanId || null,
+          schema_version: schemaVersion,
+          payload_sha256: bodyHash,
+          stored_message_count: null,
+        }),
+      },
+    );
+    if (!eventInsertRes.ok) {
+      const text = (await eventInsertRes.text()).slice(0, 300);
+      console.error(`sync_events insert failed status=${eventInsertRes.status} body=${text}`);
+      return jsonResponse({ ok: false, error: "Failed to persist sync event." }, 500);
+    }
+
+    // 2) For chat_scanned, persist per-message identity rows.
+    if (eventType === "chat_scanned" && Array.isArray(scanMessages) && scanMessages.length > 0) {
+      const rowsToInsert = scanMessages.map((m, i) => {
+        const msg = (m && typeof m === "object") ? (m as Record<string, unknown>) : {};
+        const messageIdRaw = truncate(str(msg.messageId) || str(msg.id), LIMITS.msgKey);
+        const messageId = messageIdRaw || null;
+        const rawBody = truncate(str(msg.body) || str(msg.rawBody), LIMITS.text);
+        const normalized = truncate(str(msg.normalizedBody) || rawBody, LIMITS.text);
+        return {
+          user_id: userId,
+          provider,
+          thread_id: threadId,
+          event_id: eventId,
+          message_id: messageId,
+          ordinal: typeof msg.ordinal === "number" ? msg.ordinal : i,
+          source_model_index: typeof msg.sourceModelIndex === "number" ? msg.sourceModelIndex : null,
+          sender_id: truncate(str(msg.senderId), LIMITS.text) || null,
+          from_me: typeof msg.fromMe === "boolean" ? msg.fromMe : null,
+          msg_timestamp: typeof msg.timestamp === "number" ? msg.timestamp : null,
+          raw_body: rawBody,
+          normalized_body: normalized,
+          degraded: !messageId,
+        };
+      });
+
+      const msgInsertRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/scan_messages?on_conflict=event_id,ordinal`,
+        {
+          method: "POST",
+          headers: { ...headers, Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify(rowsToInsert),
+        },
+      );
+      if (!msgInsertRes.ok) {
+        const text = (await msgInsertRes.text()).slice(0, 300);
+        console.error(`scan_messages insert failed status=${msgInsertRes.status} body=${text}`);
+        // Roll back the sync_events row so a retry can succeed cleanly.
+        await fetch(
+          `${SUPABASE_URL}/rest/v1/sync_events?event_id=eq.${encodeURIComponent(eventId)}`,
+          { method: "DELETE", headers: { ...headers, Prefer: "return=minimal" } },
+        ).catch(() => {});
+        return jsonResponse({ ok: false, error: "Failed to persist scan messages." }, 500);
+      }
+      storedMessageCount = rowsToInsert.length;
+
+      // Patch the count back onto sync_events for replay receipts.
+      fetch(
+        `${SUPABASE_URL}/rest/v1/sync_events?event_id=eq.${encodeURIComponent(eventId)}`,
+        {
+          method: "PATCH",
+          headers: { ...headers, Prefer: "return=minimal" },
+          body: JSON.stringify({ stored_message_count: storedMessageCount }),
+        },
+      ).catch((e) => console.warn("sync_events count patch failed:", (e as Error).message));
+    }
+  }
+  // ----------------------------------------------------------------------
+
   // Fire-and-forget intent classification when a new inbound message arrives.
   // Triggers on chat_snapshot / chat_scanned events whose newest inbound content
   // is fresher than the last intent_classified_at on the thread.
@@ -664,5 +750,16 @@ serve(async (req) => {
     `sync-thread-state OK user=${userId} provider=${provider} thread=${threadId} event=${eventType} status=${statusValue} review_active=${reviewActive}`,
   );
 
-  return jsonResponse({ ok: true });
+  if (verified) {
+    const receipt: Record<string, unknown> = {
+      ok: true,
+      eventId,
+      payloadSha256: bodyHash,
+    };
+    if (eventType === "chat_scanned") {
+      receipt.storedMessageCount = storedMessageCount;
+    }
+    return jsonResponse(receipt);
+  }
+  return jsonResponse({ ok: true, legacy: true });
 });
