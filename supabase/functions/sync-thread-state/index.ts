@@ -11,6 +11,7 @@ const corsHeaders = {
 const ALLOWED_EVENTS = new Set([
   "chat_snapshot",
   "chat_scanned",
+  "chat_message_delta",
 ]);
 
 const ALLOWED_STATUS = new Set([
@@ -284,6 +285,9 @@ serve(async (req) => {
   const scan = (body.scan && typeof body.scan === "object" && !Array.isArray(body.scan))
     ? (body.scan as Record<string, unknown>)
     : null;
+  const delta = (body.delta && typeof body.delta === "object" && !Array.isArray(body.delta))
+    ? (body.delta as Record<string, unknown>)
+    : null;
 
   if (eventType === "chat_snapshot" && !snapshot) {
     return jsonResponse({ ok: false, error: "snapshot is required for chat_snapshot events." }, 400);
@@ -296,6 +300,15 @@ serve(async (req) => {
       return jsonResponse({ ok: false, error: "scan.messages must be an array." }, 400);
     }
   }
+  if (eventType === "chat_message_delta") {
+    if (!delta) {
+      return jsonResponse({ ok: false, error: "delta is required for chat_message_delta events." }, 400);
+    }
+    const dm = delta.message;
+    if (!dm || typeof dm !== "object" || Array.isArray(dm)) {
+      return jsonResponse({ ok: false, error: "delta.message is required." }, 400);
+    }
+  }
 
   const threadId = truncate(str(thread.threadId), LIMITS.threadId);
   if (!threadId) {
@@ -304,6 +317,9 @@ serve(async (req) => {
 
   const subject = truncate(str(thread.subject), LIMITS.text);
   let sender = truncate(str(thread.sender), LIMITS.text);
+  if (!sender) {
+    sender = truncate(str((thread as Record<string, unknown>).contactName), LIMITS.text);
+  }
   if (!sender) {
     sender = truncate(deriveSenderFromThreadId(threadId), LIMITS.text);
   }
@@ -368,7 +384,10 @@ serve(async (req) => {
             payloadSha256: bodyHash,
             replay: true,
           };
-          if (existing.event_type === "chat_scanned") {
+          if (
+            existing.event_type === "chat_scanned" ||
+            existing.event_type === "chat_message_delta"
+          ) {
             receipt.storedMessageCount = (existing.stored_message_count as number) ?? 0;
           }
           return jsonResponse(receipt);
@@ -455,6 +474,35 @@ serve(async (req) => {
     upsertBody.scan_captured_at = scanCapturedAt;
     upsertBody.scan_message_count = scanMessageCount;
     if (eventType === "chat_scanned" && !status.value) {
+      upsertBody.status_value = "queued";
+    }
+  }
+
+  // Delta denormalization onto thread_states (chat_message_delta events)
+  let deltaMessage: Record<string, unknown> = {};
+  let deltaDirection = "";
+  let deltaCapturedAt: string | null = null;
+  if (delta) {
+    deltaMessage = (delta.message && typeof delta.message === "object" && !Array.isArray(delta.message))
+      ? (delta.message as Record<string, unknown>)
+      : {};
+    deltaDirection = str(delta.direction).toLowerCase();
+    deltaCapturedAt = isoOrNull(delta.capturedAt) ?? occurredAt;
+    const dmBody = truncate(str(deltaMessage.rawBody) || str(deltaMessage.body), LIMITS.text);
+    const dmFromMe = typeof deltaMessage.fromMe === "boolean"
+      ? deltaMessage.fromMe as boolean
+      : (deltaDirection === "outgoing" ? true : deltaDirection === "incoming" ? false : null);
+    const dmTs = typeof deltaMessage.timestamp === "number" ? deltaMessage.timestamp : null;
+    if (dmBody) {
+      upsertBody.latest_message = dmBody;
+      upsertBody.preview = upsertBody.preview || truncate(dmBody, LIMITS.preview);
+    }
+    upsertBody.snapshot_captured_at = deltaCapturedAt;
+    upsertBody.snapshot_body = dmBody;
+    upsertBody.snapshot_from_me = dmFromMe;
+    upsertBody.snapshot_msg_type = truncate(str(deltaMessage.type), LIMITS.short);
+    upsertBody.snapshot_msg_timestamp = dmTs;
+    if (eventType === "chat_message_delta" && !status.value) {
       upsertBody.status_value = "queued";
     }
   }
@@ -670,13 +718,109 @@ serve(async (req) => {
         },
       ).catch((e) => console.warn("sync_events count patch failed:", (e as Error).message));
     }
+
+    // 3) For chat_message_delta, persist the single new message (deduped).
+    if (eventType === "chat_message_delta" && delta) {
+      const messageIdRaw = truncate(
+        str(deltaMessage.messageId) || str(deltaMessage.id),
+        LIMITS.msgKey,
+      );
+      if (!messageIdRaw) {
+        // Roll back the sync_events row so a retry can succeed cleanly.
+        await fetch(
+          `${SUPABASE_URL}/rest/v1/sync_events?event_id=eq.${encodeURIComponent(eventId)}`,
+          { method: "DELETE", headers: { ...headers, Prefer: "return=minimal" } },
+        ).catch(() => {});
+        return jsonResponse({ ok: false, error: "delta.message.messageId is required." }, 400);
+      }
+
+      const rawBody = truncate(
+        str(deltaMessage.rawBody) || str(deltaMessage.body),
+        LIMITS.text,
+      );
+      const normalized = truncate(str(deltaMessage.normalizedBody) || rawBody, LIMITS.text);
+      const fromMe = typeof deltaMessage.fromMe === "boolean"
+        ? (deltaMessage.fromMe as boolean)
+        : (deltaDirection === "outgoing" ? true : deltaDirection === "incoming" ? false : null);
+
+      // Dedup by (user_id, thread_id, message_id) — partial unique index.
+      const inList = `"${messageIdRaw.replace(/"/g, '\\"')}"`;
+      const lookupUrl =
+        `${SUPABASE_URL}/rest/v1/scan_messages?user_id=eq.${userId}&thread_id=eq.${encodeURIComponent(threadId)}&message_id=in.(${encodeURIComponent(inList)})&select=message_id`;
+      let alreadyExists = false;
+      try {
+        const r = await fetch(lookupUrl, { headers });
+        if (r.ok) {
+          const arr = await r.json();
+          if (Array.isArray(arr) && arr.length > 0) alreadyExists = true;
+        }
+      } catch {
+        // best-effort; on_conflict below still protects safe replays
+      }
+
+      if (!alreadyExists) {
+        const row = {
+          user_id: userId,
+          provider,
+          thread_id: threadId,
+          event_id: eventId,
+          message_id: messageIdRaw,
+          ordinal: 0,
+          source_model_index: null,
+          sender_id: truncate(str(deltaMessage.senderId), LIMITS.text) || null,
+          from_me: fromMe,
+          msg_timestamp: typeof deltaMessage.timestamp === "number"
+            ? deltaMessage.timestamp
+            : null,
+          raw_body: rawBody,
+          normalized_body: normalized,
+          degraded: false,
+        };
+        const msgInsertRes = await fetch(
+          `${SUPABASE_URL}/rest/v1/scan_messages?on_conflict=event_id,ordinal`,
+          {
+            method: "POST",
+            headers: { ...headers, Prefer: "resolution=merge-duplicates,return=minimal" },
+            body: JSON.stringify([row]),
+          },
+        );
+        if (!msgInsertRes.ok) {
+          const text = (await msgInsertRes.text()).slice(0, 300);
+          console.error(`scan_messages delta insert failed status=${msgInsertRes.status} body=${text}`);
+          await fetch(
+            `${SUPABASE_URL}/rest/v1/sync_events?event_id=eq.${encodeURIComponent(eventId)}`,
+            { method: "DELETE", headers: { ...headers, Prefer: "return=minimal" } },
+          ).catch(() => {});
+          return jsonResponse({ ok: false, error: "Failed to persist delta message." }, 500);
+        }
+        storedMessageCount = 1;
+      } else {
+        storedMessageCount = 0;
+      }
+
+      fetch(
+        `${SUPABASE_URL}/rest/v1/sync_events?event_id=eq.${encodeURIComponent(eventId)}`,
+        {
+          method: "PATCH",
+          headers: { ...headers, Prefer: "return=minimal" },
+          body: JSON.stringify({ stored_message_count: storedMessageCount }),
+        },
+      ).catch((e) => console.warn("sync_events count patch failed:", (e as Error).message));
+      console.log(
+        `chat_message_delta persisted=${storedMessageCount} skipped_existing=${alreadyExists ? 1 : 0} event=${eventId} msg=${messageIdRaw}`,
+      );
+    }
   }
   // ----------------------------------------------------------------------
 
   // Fire-and-forget intent classification when a new inbound message arrives.
   // Triggers on chat_snapshot / chat_scanned events whose newest inbound content
   // is fresher than the last intent_classified_at on the thread.
-  if (eventType === "chat_snapshot" || eventType === "chat_scanned") {
+  if (
+    eventType === "chat_snapshot" ||
+    eventType === "chat_scanned" ||
+    eventType === "chat_message_delta"
+  ) {
     try {
       // Get the previously stored classification timestamp from the upsert response.
       // (We already read rows[0] above for threadStateId — refetch the field here cheaply.)
@@ -701,6 +845,17 @@ serve(async (req) => {
         if (!fromMe) {
           inboundText = truncate(str(lm.body), LIMITS.text);
           inboundAt = isoOrNull(snapshot.capturedAt) ?? occurredAt;
+        }
+      } else if (eventType === "chat_message_delta" && delta) {
+        const fromMe = typeof deltaMessage.fromMe === "boolean"
+          ? (deltaMessage.fromMe as boolean)
+          : deltaDirection === "outgoing";
+        if (!fromMe) {
+          inboundText = truncate(
+            str(deltaMessage.rawBody) || str(deltaMessage.body),
+            LIMITS.text,
+          );
+          inboundAt = deltaCapturedAt ?? occurredAt;
         }
       } else if (eventType === "chat_scanned" && Array.isArray(scanMessages)) {
         // Intent is defined by the SUM of all messages in the thread.
@@ -790,6 +945,9 @@ serve(async (req) => {
       payloadSha256: bodyHash,
     };
     if (eventType === "chat_scanned") {
+      receipt.storedMessageCount = storedMessageCount;
+    }
+    if (eventType === "chat_message_delta") {
       receipt.storedMessageCount = storedMessageCount;
     }
     return jsonResponse(receipt);
