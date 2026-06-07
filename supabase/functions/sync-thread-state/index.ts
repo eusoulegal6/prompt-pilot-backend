@@ -944,6 +944,9 @@ serve(async (req) => {
     if (eventType === "chat_scanned") {
       receipt.storedMessageCount = storedMessageCount;
     }
+    if (eventType === "chat_message_delta") {
+      receipt.storedMessageCount = storedMessageCount;
+    }
     return jsonResponse(receipt);
   }
   return jsonResponse({ ok: true, legacy: true });
