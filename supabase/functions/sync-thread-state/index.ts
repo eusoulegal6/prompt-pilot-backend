@@ -384,7 +384,10 @@ serve(async (req) => {
             payloadSha256: bodyHash,
             replay: true,
           };
-          if (existing.event_type === "chat_scanned") {
+          if (
+            existing.event_type === "chat_scanned" ||
+            existing.event_type === "chat_message_delta"
+          ) {
             receipt.storedMessageCount = (existing.stored_message_count as number) ?? 0;
           }
           return jsonResponse(receipt);
