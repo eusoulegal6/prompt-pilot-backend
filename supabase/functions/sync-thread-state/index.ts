@@ -285,6 +285,9 @@ serve(async (req) => {
   const scan = (body.scan && typeof body.scan === "object" && !Array.isArray(body.scan))
     ? (body.scan as Record<string, unknown>)
     : null;
+  const delta = (body.delta && typeof body.delta === "object" && !Array.isArray(body.delta))
+    ? (body.delta as Record<string, unknown>)
+    : null;
 
   if (eventType === "chat_snapshot" && !snapshot) {
     return jsonResponse({ ok: false, error: "snapshot is required for chat_snapshot events." }, 400);
@@ -295,6 +298,15 @@ serve(async (req) => {
     }
     if (!Array.isArray(scan.messages)) {
       return jsonResponse({ ok: false, error: "scan.messages must be an array." }, 400);
+    }
+  }
+  if (eventType === "chat_message_delta") {
+    if (!delta) {
+      return jsonResponse({ ok: false, error: "delta is required for chat_message_delta events." }, 400);
+    }
+    const dm = delta.message;
+    if (!dm || typeof dm !== "object" || Array.isArray(dm)) {
+      return jsonResponse({ ok: false, error: "delta.message is required." }, 400);
     }
   }
 
