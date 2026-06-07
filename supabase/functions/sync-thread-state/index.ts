@@ -318,6 +318,9 @@ serve(async (req) => {
   const subject = truncate(str(thread.subject), LIMITS.text);
   let sender = truncate(str(thread.sender), LIMITS.text);
   if (!sender) {
+    sender = truncate(str((thread as Record<string, unknown>).contactName), LIMITS.text);
+  }
+  if (!sender) {
     sender = truncate(deriveSenderFromThreadId(threadId), LIMITS.text);
   }
   const latestMessage = truncate(str(thread.latestMessage), LIMITS.text);
