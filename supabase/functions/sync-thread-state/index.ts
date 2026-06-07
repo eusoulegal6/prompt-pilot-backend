@@ -475,6 +475,35 @@ serve(async (req) => {
     }
   }
 
+  // Delta denormalization onto thread_states (chat_message_delta events)
+  let deltaMessage: Record<string, unknown> = {};
+  let deltaDirection = "";
+  let deltaCapturedAt: string | null = null;
+  if (delta) {
+    deltaMessage = (delta.message && typeof delta.message === "object" && !Array.isArray(delta.message))
+      ? (delta.message as Record<string, unknown>)
+      : {};
+    deltaDirection = str(delta.direction).toLowerCase();
+    deltaCapturedAt = isoOrNull(delta.capturedAt) ?? occurredAt;
+    const dmBody = truncate(str(deltaMessage.rawBody) || str(deltaMessage.body), LIMITS.text);
+    const dmFromMe = typeof deltaMessage.fromMe === "boolean"
+      ? deltaMessage.fromMe as boolean
+      : (deltaDirection === "outgoing" ? true : deltaDirection === "incoming" ? false : null);
+    const dmTs = typeof deltaMessage.timestamp === "number" ? deltaMessage.timestamp : null;
+    if (dmBody) {
+      upsertBody.latest_message = dmBody;
+      upsertBody.preview = upsertBody.preview || truncate(dmBody, LIMITS.preview);
+    }
+    upsertBody.snapshot_captured_at = deltaCapturedAt;
+    upsertBody.snapshot_body = dmBody;
+    upsertBody.snapshot_from_me = dmFromMe;
+    upsertBody.snapshot_msg_type = truncate(str(deltaMessage.type), LIMITS.short);
+    upsertBody.snapshot_msg_timestamp = dmTs;
+    if (eventType === "chat_message_delta" && !status.value) {
+      upsertBody.status_value = "queued";
+    }
+  }
+
   // Upsert by (user_id, provider, thread_id)
   const upsertUrl =
     `${SUPABASE_URL}/rest/v1/thread_states?on_conflict=user_id,provider,thread_id`;
