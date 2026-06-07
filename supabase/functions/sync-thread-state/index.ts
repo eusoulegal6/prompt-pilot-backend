@@ -813,7 +813,11 @@ serve(async (req) => {
   // Fire-and-forget intent classification when a new inbound message arrives.
   // Triggers on chat_snapshot / chat_scanned events whose newest inbound content
   // is fresher than the last intent_classified_at on the thread.
-  if (eventType === "chat_snapshot" || eventType === "chat_scanned") {
+  if (
+    eventType === "chat_snapshot" ||
+    eventType === "chat_scanned" ||
+    eventType === "chat_message_delta"
+  ) {
     try {
       // Get the previously stored classification timestamp from the upsert response.
       // (We already read rows[0] above for threadStateId — refetch the field here cheaply.)
@@ -838,6 +842,17 @@ serve(async (req) => {
         if (!fromMe) {
           inboundText = truncate(str(lm.body), LIMITS.text);
           inboundAt = isoOrNull(snapshot.capturedAt) ?? occurredAt;
+        }
+      } else if (eventType === "chat_message_delta" && delta) {
+        const fromMe = typeof deltaMessage.fromMe === "boolean"
+          ? (deltaMessage.fromMe as boolean)
+          : deltaDirection === "outgoing";
+        if (!fromMe) {
+          inboundText = truncate(
+            str(deltaMessage.rawBody) || str(deltaMessage.body),
+            LIMITS.text,
+          );
+          inboundAt = deltaCapturedAt ?? occurredAt;
         }
       } else if (eventType === "chat_scanned" && Array.isArray(scanMessages)) {
         // Intent is defined by the SUM of all messages in the thread.
