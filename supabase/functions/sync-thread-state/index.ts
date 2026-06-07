@@ -11,6 +11,7 @@ const corsHeaders = {
 const ALLOWED_EVENTS = new Set([
   "chat_snapshot",
   "chat_scanned",
+  "chat_message_delta",
 ]);
 
 const ALLOWED_STATUS = new Set([
