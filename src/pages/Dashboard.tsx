@@ -6,6 +6,7 @@ import WhisperActivity from "@/components/WhisperActivity";
 import FlaggedReviewSection from "@/components/FlaggedReviewSection";
 import ManualDraftReply from "@/components/ManualDraftReply";
 import ThreadActivitySection from "@/components/ThreadActivitySection";
+import MessageBatchesSection from "@/components/MessageBatchesSection";
 
 const Dashboard = () => {
   const { user } = useAuthReady();
@@ -35,6 +36,7 @@ const Dashboard = () => {
         </div>
         <ConnectExtension />
         <ManualDraftReply />
+        <MessageBatchesSection />
         <ThreadActivitySection />
         <FlaggedReviewSection />
         <WhisperActivity />
