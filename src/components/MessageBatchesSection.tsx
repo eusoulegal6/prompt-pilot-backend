@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { Inbox, RefreshCw, Trash2, ChevronDown, ChevronRight } from "lucide-react";
 
 type SyncEvent = {
