@@ -54,16 +54,9 @@ const MessageBatchesSection = () => {
   const load = useCallback(async () => {
     setRefreshing(true);
     setError(null);
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) {
-      setError("Not signed in");
-      setLoading(false);
-      setRefreshing(false);
-      return;
-    }
     try {
       const res = await fetch(`${URL_BASE}?limit=15`, {
-        headers: { apikey: ANON_KEY, Authorization: `Bearer ${session.access_token}` },
+        headers: { apikey: ANON_KEY },
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body?.error ?? `Request failed (${res.status})`);
@@ -78,18 +71,15 @@ const MessageBatchesSection = () => {
   }, []);
 
   const clearAll = useCallback(async () => {
-    if (!window.confirm("Clear all your messages, scans, snapshots and thread state? This cannot be undone.")) return;
+    if (!window.confirm("Clear all messages, scans, snapshots and thread state? This cannot be undone.")) return;
     setClearing(true);
     setError(null);
     setInfo(null);
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) { setError("Not signed in"); setClearing(false); return; }
     try {
       const res = await fetch(URL_BASE, {
         method: "POST",
         headers: {
           apikey: ANON_KEY,
-          Authorization: `Bearer ${session.access_token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ action: "clear" }),
