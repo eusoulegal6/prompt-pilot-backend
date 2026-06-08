@@ -112,7 +112,6 @@ serve(async (req) => {
   }
 
   const userId = await resolveUserId(req, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY);
-  if (!userId) return jsonResponse({ error: "Unauthorized" }, 401);
 
   if (req.method === "POST") {
     let action = "";
@@ -122,11 +121,11 @@ serve(async (req) => {
     } catch { /* empty body */ }
     if (action !== "clear") return jsonResponse({ error: "Unknown action" }, 400);
 
-    const u = `user_id=eq.${userId}`;
+    const userFilter = userId ? `?user_id=eq.${userId}` : "";
     const tables = ["scan_messages", "chat_snapshots", "chat_scans", "thread_state_history", "thread_states", "sync_events"];
     const results: Record<string, boolean> = {};
     for (const t of tables) {
-      results[t] = await restDelete(`${SUPABASE_URL}/rest/v1/${t}?${u}`, SUPABASE_SERVICE_ROLE_KEY);
+      results[t] = await restDelete(`${SUPABASE_URL}/rest/v1/${t}${userFilter}`, SUPABASE_SERVICE_ROLE_KEY);
     }
     return jsonResponse({ ok: true, cleared: results });
   }
@@ -138,14 +137,15 @@ serve(async (req) => {
   if (!Number.isFinite(limit) || limit < 1) limit = 10;
   if (limit > 50) limit = 50;
 
-  const eventsUrl = `${SUPABASE_URL}/rest/v1/sync_events?user_id=eq.${userId}&select=event_id,event_type,provider,thread_id,scan_id,schema_version,payload_sha256,stored_message_count,received_at&order=received_at.desc&limit=${limit}`;
+  const userFilter = userId ? `&user_id=eq.${userId}` : "";
+  const eventsUrl = `${SUPABASE_URL}/rest/v1/sync_events?select=event_id,event_type,provider,thread_id,scan_id,schema_version,payload_sha256,stored_message_count,received_at${userFilter}&order=received_at.desc&limit=${limit}`;
   const events = await restGet(eventsUrl, SUPABASE_SERVICE_ROLE_KEY);
   const eventIds = Array.isArray(events) ? events.map((e: { event_id: string }) => e.event_id).filter(Boolean) : [];
 
   let messages: unknown[] = [];
   if (eventIds.length > 0) {
     const inList = eventIds.map((id: string) => `"${id.replace(/"/g, '\\"')}"`).join(",");
-    const msgUrl = `${SUPABASE_URL}/rest/v1/scan_messages?user_id=eq.${userId}&event_id=in.(${encodeURIComponent(inList)})&select=event_id,thread_id,message_id,ordinal,source_model_index,sender_id,from_me,msg_timestamp,raw_body,normalized_body,degraded&order=msg_timestamp.asc&limit=2000`;
+    const msgUrl = `${SUPABASE_URL}/rest/v1/scan_messages?event_id=in.(${encodeURIComponent(inList)})${userFilter}&select=event_id,thread_id,message_id,ordinal,source_model_index,sender_id,from_me,msg_timestamp,raw_body,normalized_body,degraded&order=msg_timestamp.asc&limit=2000`;
     messages = await restGet(msgUrl, SUPABASE_SERVICE_ROLE_KEY);
   }
 
