@@ -1,9 +1,9 @@
 import { useAuthReady } from "@/hooks/useAuthReady";
-import { Navigate } from "react-router-dom";
 import WhisperActivity from "@/components/WhisperActivity";
+import MessageBatchesSection from "@/components/MessageBatchesSection";
 
 const Index = () => {
-  const { user, isReady } = useAuthReady();
+  const { isReady } = useAuthReady();
 
   if (!isReady) {
     return (
@@ -11,10 +11,6 @@ const Index = () => {
         <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full" />
       </div>
     );
-  }
-
-  if (user) {
-    return <Navigate to="/dashboard" replace />;
   }
 
   return (
@@ -29,6 +25,7 @@ const Index = () => {
             Check your email for a confirmation link after signing up.
           </p>
         </div>
+        <MessageBatchesSection />
         <WhisperActivity />
       </div>
     </div>
