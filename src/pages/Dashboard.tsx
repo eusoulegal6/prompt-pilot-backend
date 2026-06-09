@@ -7,6 +7,7 @@ import FlaggedReviewSection from "@/components/FlaggedReviewSection";
 import ManualDraftReply from "@/components/ManualDraftReply";
 import ThreadActivitySection from "@/components/ThreadActivitySection";
 import MessageBatchesSection from "@/components/MessageBatchesSection";
+import ContactsSection from "@/components/ContactsSection";
 
 const Dashboard = () => {
   const { user } = useAuthReady();
@@ -36,6 +37,7 @@ const Dashboard = () => {
         </div>
         <ConnectExtension />
         <ManualDraftReply />
+        <ContactsSection />
         <MessageBatchesSection />
         <ThreadActivitySection />
         <FlaggedReviewSection />
