@@ -222,13 +222,14 @@ serve(async (req) => {
       snapParams.set("limit", String(Math.min(500, threadIds.length * 25)));
       const snapUrl = `${SUPABASE_URL}/rest/v1/chat_snapshots?${snapParams.toString()}`;
 
-      // Latest scan per thread (we'll dedupe client-side, take first per thread_id).
+      // Recent scans per thread (we merge messages across multiple scans so older
+      // history surfaces even when the most recent scan captured only 1 message).
       const scanParams = new URLSearchParams();
       scanParams.set("user_id", `eq.${userId}`);
       scanParams.set("thread_id", `in.(${inList})`);
       scanParams.set("select", "thread_id,captured_at,message_count,messages");
       scanParams.set("order", "captured_at.desc");
-      scanParams.set("limit", String(threadIds.length * 3));
+      scanParams.set("limit", String(threadIds.length * 10));
       const scanUrl = `${SUPABASE_URL}/rest/v1/chat_scans?${scanParams.toString()}`;
 
       const headers = {
@@ -262,9 +263,13 @@ serve(async (req) => {
         snapsByThread.set(row.thread_id, list);
       }
 
-      const latestScanByThread = new Map<string, (typeof scanRows)[number]>();
+      // Group ALL recent scans by thread (not just the newest). Dedupe below
+      // collapses duplicates across scans by (from_me, body).
+      const scansByThread = new Map<string, (typeof scanRows)>();
       for (const row of scanRows) {
-        if (!latestScanByThread.has(row.thread_id)) latestScanByThread.set(row.thread_id, row);
+        const list = scansByThread.get(row.thread_id) ?? [];
+        list.push(row);
+        scansByThread.set(row.thread_id, list);
       }
 
       type RecentMsg = {
@@ -309,8 +314,8 @@ serve(async (req) => {
       for (const item of itemList) {
         const tid = String(item.thread_id);
         const snaps = snapsByThread.get(tid) ?? [];
-        const scan = latestScanByThread.get(tid);
-        const scanMsgs = scan ? normalizeScanMessages(scan.messages) : [];
+        const scans = scansByThread.get(tid) ?? [];
+        const scanMsgs = scans.flatMap((s) => normalizeScanMessages(s.messages));
 
         const merged: RecentMsg[] = [
           ...snaps
@@ -341,7 +346,7 @@ serve(async (req) => {
           .reverse(); // chronological order for display
 
         item.recent_messages = recent;
-        if (scan) item.latest_scan_message_count = scan.message_count;
+        if (scans.length > 0) item.latest_scan_message_count = scans[0].message_count;
       }
     }
 
