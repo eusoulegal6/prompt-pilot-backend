@@ -133,11 +133,23 @@ serve(async (req) => {
   if (req.method !== "GET") return jsonResponse({ error: "Method not allowed" }, 405);
 
   const url = new URL(req.url);
+  const view = url.searchParams.get("view") ?? "batches";
   let limit = parseInt(url.searchParams.get("limit") ?? "10", 10);
   if (!Number.isFinite(limit) || limit < 1) limit = 10;
   if (limit > 50) limit = 50;
 
   const userFilter = userId ? `&user_id=eq.${userId}` : "";
+
+  if (view === "contacts") {
+    const threadsUrl = `${SUPABASE_URL}/rest/v1/thread_states?select=thread_id,sender,subject,provider${userFilter}&limit=2000`;
+    const messagesUrl = `${SUPABASE_URL}/rest/v1/scan_messages?select=id,thread_id,sender_id,sender,from_me,msg_timestamp,body,normalized_body,raw_body,msg_type,ack,has_reaction,is_forwarded,has_media,caption,mime_type,created_at${userFilter}&order=msg_timestamp.asc&limit=5000`;
+    const [threads, contactMessages] = await Promise.all([
+      restGet(threadsUrl, SUPABASE_SERVICE_ROLE_KEY),
+      restGet(messagesUrl, SUPABASE_SERVICE_ROLE_KEY),
+    ]);
+    return jsonResponse({ ok: true, threads: threads ?? [], messages: contactMessages ?? [] });
+  }
+
   const eventsUrl = `${SUPABASE_URL}/rest/v1/sync_events?select=event_id,event_type,provider,thread_id,scan_id,schema_version,payload_sha256,stored_message_count,received_at${userFilter}&order=received_at.desc&limit=${limit}`;
   const events = await restGet(eventsUrl, SUPABASE_SERVICE_ROLE_KEY);
   const eventIds = Array.isArray(events) ? events.map((e: { event_id: string }) => e.event_id).filter(Boolean) : [];
