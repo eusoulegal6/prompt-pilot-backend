@@ -361,53 +361,86 @@ export type Database = {
       }
       scan_messages: {
         Row: {
+          ack: number | null
+          body: string | null
+          caption: string | null
           created_at: string
           degraded: boolean
           event_id: string
           from_me: boolean | null
+          has_media: boolean | null
+          has_reaction: boolean | null
           id: string
+          is_forwarded: boolean | null
           message_id: string | null
+          mime_type: string | null
           msg_timestamp: number | null
+          msg_type: string | null
           normalized_body: string | null
+          normalized_caption: string | null
           ordinal: number
           provider: string
           raw_body: string | null
+          sender: string | null
           sender_id: string | null
           source_model_index: number | null
+          subtype: string | null
           thread_id: string
           user_id: string
         }
         Insert: {
+          ack?: number | null
+          body?: string | null
+          caption?: string | null
           created_at?: string
           degraded?: boolean
           event_id: string
           from_me?: boolean | null
+          has_media?: boolean | null
+          has_reaction?: boolean | null
           id?: string
+          is_forwarded?: boolean | null
           message_id?: string | null
+          mime_type?: string | null
           msg_timestamp?: number | null
+          msg_type?: string | null
           normalized_body?: string | null
+          normalized_caption?: string | null
           ordinal: number
           provider?: string
           raw_body?: string | null
+          sender?: string | null
           sender_id?: string | null
           source_model_index?: number | null
+          subtype?: string | null
           thread_id: string
           user_id: string
         }
         Update: {
+          ack?: number | null
+          body?: string | null
+          caption?: string | null
           created_at?: string
           degraded?: boolean
           event_id?: string
           from_me?: boolean | null
+          has_media?: boolean | null
+          has_reaction?: boolean | null
           id?: string
+          is_forwarded?: boolean | null
           message_id?: string | null
+          mime_type?: string | null
           msg_timestamp?: number | null
+          msg_type?: string | null
           normalized_body?: string | null
+          normalized_caption?: string | null
           ordinal?: number
           provider?: string
           raw_body?: string | null
+          sender?: string | null
           sender_id?: string | null
           source_model_index?: number | null
+          subtype?: string | null
           thread_id?: string
           user_id?: string
         }
