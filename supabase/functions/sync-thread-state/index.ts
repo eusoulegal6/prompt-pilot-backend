@@ -700,9 +700,25 @@ serve(async (req) => {
           }
         }
       }
-      const rowsFiltered = enrichedRows.filter(
-        (r) => !r.message_id || !existingIds.has(r.message_id),
-      );
+      // Also de-duplicate within the same batch (defensive — the partial
+      // unique index on (user_id, thread_id, message_id) would otherwise
+      // reject the whole insert if the extension ever shipped duplicates).
+      const seenInBatch = new Set<string>();
+      const skippedExisting: string[] = [];
+      const skippedDuplicateInBatch: string[] = [];
+      const rowsFiltered = enrichedRows.filter((r) => {
+        if (!r.message_id) return true; // degraded — always insert
+        if (existingIds.has(r.message_id)) {
+          skippedExisting.push(r.message_id);
+          return false;
+        }
+        if (seenInBatch.has(r.message_id)) {
+          skippedDuplicateInBatch.push(r.message_id);
+          return false;
+        }
+        seenInBatch.add(r.message_id);
+        return true;
+      });
 
       if (rowsFiltered.length > 0) {
         const msgInsertRes = await fetch(
@@ -724,13 +740,17 @@ serve(async (req) => {
           return jsonResponse({ ok: false, error: "Failed to persist scan messages." }, 500);
         }
       }
-      // Bug 1: report the count of messages the scan carries, not just the
-      // newly-inserted delta. Single-message scans whose only message was
-      // already stored via an earlier event were reporting 0 even though the
-      // message is present in scan_messages.
-      storedMessageCount = enrichedRows.length;
+      // stored_message_count reflects the actual INSERT count for this event,
+      // NOT the payload's messageCount. Re-scans of the same thread therefore
+      // legitimately report 0 when every message is already in scan_messages.
+      storedMessageCount = rowsFiltered.length;
+      const degradedCount = enrichedRows.filter((r) => !r.message_id).length;
       console.log(
-        `scan_messages received=${enrichedRows.length} inserted=${rowsFiltered.length} skipped_existing=${enrichedRows.length - rowsFiltered.length} event=${eventId}`,
+        `scan_messages received=${enrichedRows.length} inserted=${rowsFiltered.length} ` +
+          `skipped_existing=${skippedExisting.length} skipped_dup_in_batch=${skippedDuplicateInBatch.length} ` +
+          `degraded=${degradedCount} thread=${threadId} event=${eventId}` +
+          (skippedExisting.length > 0 ? ` existing_ids=${skippedExisting.slice(0, 10).join(",")}` : "") +
+          (skippedDuplicateInBatch.length > 0 ? ` dup_ids=${skippedDuplicateInBatch.slice(0, 10).join(",")}` : ""),
       );
 
       // Patch the count back onto sync_events for replay receipts.
