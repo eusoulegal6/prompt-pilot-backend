@@ -655,6 +655,27 @@ serve(async (req) => {
         };
       });
 
+      // Bug 2: persist the rich metadata fields the extension ships.
+      const enrichedRows = rowsToInsert.map((row, i) => {
+        const msg = (scanMessages[i] && typeof scanMessages[i] === "object")
+          ? (scanMessages[i] as Record<string, unknown>)
+          : {};
+        return {
+          ...row,
+          body: truncate(str(msg.body), LIMITS.text) || null,
+          sender: truncate(str(msg.sender), LIMITS.text) || null,
+          msg_type: truncate(str(msg.type), LIMITS.short) || null,
+          ack: typeof msg.ack === "number" ? msg.ack : null,
+          has_reaction: typeof msg.hasReaction === "boolean" ? msg.hasReaction : null,
+          is_forwarded: typeof msg.isForwarded === "boolean" ? msg.isForwarded : null,
+          has_media: typeof msg.hasMedia === "boolean" ? msg.hasMedia : null,
+          caption: truncate(str(msg.caption), LIMITS.text) || null,
+          normalized_caption: truncate(str(msg.normalizedCaption), LIMITS.text) || null,
+          subtype: truncate(str(msg.subtype), LIMITS.short) || null,
+          mime_type: truncate(str(msg.mimeType), LIMITS.short) || null,
+        };
+      });
+
       // Pre-filter out messages whose message_id already exists for this
       // (user_id, thread_id). The partial unique index on (user_id, thread_id,
       // message_id) WHERE message_id IS NOT NULL prevents duplicates across
@@ -662,7 +683,7 @@ serve(async (req) => {
       // filter client-side. Degraded rows (no message_id) are always inserted
       // and de-duped by (event_id, ordinal) for safe replays.
       const candidateIds = Array.from(
-        new Set(rowsToInsert.map((r) => r.message_id).filter((x): x is string => !!x)),
+        new Set(enrichedRows.map((r) => r.message_id).filter((x): x is string => !!x)),
       );
       const existingIds = new Set<string>();
       if (candidateIds.length > 0) {
@@ -679,7 +700,7 @@ serve(async (req) => {
           }
         }
       }
-      const rowsFiltered = rowsToInsert.filter(
+      const rowsFiltered = enrichedRows.filter(
         (r) => !r.message_id || !existingIds.has(r.message_id),
       );
 
@@ -703,9 +724,13 @@ serve(async (req) => {
           return jsonResponse({ ok: false, error: "Failed to persist scan messages." }, 500);
         }
       }
-      storedMessageCount = rowsFiltered.length;
+      // Bug 1: report the count of messages the scan carries, not just the
+      // newly-inserted delta. Single-message scans whose only message was
+      // already stored via an earlier event were reporting 0 even though the
+      // message is present in scan_messages.
+      storedMessageCount = enrichedRows.length;
       console.log(
-        `scan_messages persisted=${storedMessageCount} skipped_existing=${rowsToInsert.length - rowsFiltered.length} event=${eventId}`,
+        `scan_messages received=${enrichedRows.length} inserted=${rowsFiltered.length} skipped_existing=${enrichedRows.length - rowsFiltered.length} event=${eventId}`,
       );
 
       // Patch the count back onto sync_events for replay receipts.
@@ -775,6 +800,17 @@ serve(async (req) => {
           raw_body: rawBody,
           normalized_body: normalized,
           degraded: false,
+          body: truncate(str(deltaMessage.body), LIMITS.text) || null,
+          sender: truncate(str(deltaMessage.sender), LIMITS.text) || null,
+          msg_type: truncate(str(deltaMessage.type), LIMITS.short) || null,
+          ack: typeof deltaMessage.ack === "number" ? deltaMessage.ack : null,
+          has_reaction: typeof deltaMessage.hasReaction === "boolean" ? deltaMessage.hasReaction : null,
+          is_forwarded: typeof deltaMessage.isForwarded === "boolean" ? deltaMessage.isForwarded : null,
+          has_media: typeof deltaMessage.hasMedia === "boolean" ? deltaMessage.hasMedia : null,
+          caption: truncate(str(deltaMessage.caption), LIMITS.text) || null,
+          normalized_caption: truncate(str(deltaMessage.normalizedCaption), LIMITS.text) || null,
+          subtype: truncate(str(deltaMessage.subtype), LIMITS.short) || null,
+          mime_type: truncate(str(deltaMessage.mimeType), LIMITS.short) || null,
         };
         const msgInsertRes = await fetch(
           `${SUPABASE_URL}/rest/v1/scan_messages?on_conflict=event_id,ordinal`,
