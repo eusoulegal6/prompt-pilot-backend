@@ -1,5 +1,6 @@
 import WhisperActivity from "@/components/WhisperActivity";
 import MessageBatchesSection from "@/components/MessageBatchesSection";
+import ContactsSection from "@/components/ContactsSection";
 
 const Index = () => {
   return (
@@ -11,6 +12,7 @@ const Index = () => {
             AI-powered chat reply drafting for Whatsapp.
           </p>
         </div>
+        <ContactsSection />
         <MessageBatchesSection />
         <WhisperActivity />
       </div>
