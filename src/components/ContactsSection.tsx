@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { Users, RefreshCw, ChevronDown, ChevronRight } from "lucide-react";
+
+const URL_BASE =
+  "https://ocpphyjkstvfespxrajk.supabase.co/functions/v1/message-batches";
+const ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9jcHBoeWprc3R2ZmVzcHhyYWprIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcxODExMzUsImV4cCI6MjA5Mjc1NzEzNX0.wcqrpSVkgDZRPet_4yLcF5YYISsWqRacVNOHf_eW8uY";
 
 type ThreadState = {
   thread_id: string;
@@ -57,22 +61,13 @@ const ContactsSection = () => {
     setRefreshing(true);
     setError(null);
     try {
-      const [tRes, mRes] = await Promise.all([
-        supabase
-          .from("thread_states")
-          .select("thread_id, sender, subject, provider"),
-        supabase
-          .from("scan_messages")
-          .select(
-            "id, thread_id, sender_id, sender, from_me, msg_timestamp, body, normalized_body, raw_body, msg_type, ack, has_reaction, is_forwarded, has_media, caption, mime_type, created_at",
-          )
-          .order("msg_timestamp", { ascending: true })
-          .limit(5000),
-      ]);
-      if (tRes.error) throw tRes.error;
-      if (mRes.error) throw mRes.error;
-      setThreads((tRes.data ?? []) as ThreadState[]);
-      setMessages((mRes.data ?? []) as ScanMessage[]);
+      const res = await fetch(`${URL_BASE}?view=contacts`, {
+        headers: { apikey: ANON_KEY },
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.error ?? `Request failed (${res.status})`);
+      setThreads(Array.isArray(body.threads) ? (body.threads as ThreadState[]) : []);
+      setMessages(Array.isArray(body.messages) ? (body.messages as ScanMessage[]) : []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load contacts");
     } finally {
