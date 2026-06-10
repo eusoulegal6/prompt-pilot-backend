@@ -98,7 +98,7 @@ serve(async (req) => {
         });
         if (!up.ok) throw new Error(`backup: ${up.status} ${await up.text()}`);
       }
-      for (const t of [...TABLES].reverse()) await deleteAll(t);
+      for (const t of TABLES) await deleteAll(t);
       return json({ ok: true, action: "wipe", backed_up: total });
     }
 
@@ -107,9 +107,9 @@ serve(async (req) => {
       const rows = await b.json();
       if (!rows?.[0]?.data) return json({ ok: false, error: "No backup available" }, 404);
       const data = rows[0].data as Record<string, unknown[]>;
-      for (const t of [...TABLES].reverse()) await deleteAll(t);
+      for (const t of TABLES) await deleteAll(t);
       let restored = 0;
-      for (const t of TABLES) {
+      for (const t of [...TABLES].reverse()) {
         const r = data[t] ?? [];
         await insertRows(t, r);
         restored += r.length;
