@@ -218,6 +218,27 @@ export type Database = {
         }
         Relationships: []
       }
+      contact_backups: {
+        Row: {
+          created_at: string
+          data: Json
+          thread_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          data: Json
+          thread_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          data?: Json
+          thread_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       extension_pair_codes: {
         Row: {
           code: string
