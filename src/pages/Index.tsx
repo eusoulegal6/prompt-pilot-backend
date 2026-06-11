@@ -2,6 +2,7 @@ import WhisperActivity from "@/components/WhisperActivity";
 import MessageBatchesSection from "@/components/MessageBatchesSection";
 import ContactsSection from "@/components/ContactsSection";
 import ContactWipeRestore from "@/components/ContactWipeRestore";
+import WipeAllContacts from "@/components/WipeAllContacts";
 
 const Index = () => {
   return (
@@ -17,6 +18,7 @@ const Index = () => {
         <ContactWipeRestore />
         <MessageBatchesSection />
         <WhisperActivity />
+        <WipeAllContacts />
       </div>
     </div>
   );
