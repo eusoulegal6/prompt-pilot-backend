@@ -1051,6 +1051,27 @@ serve(async (req) => {
         storedMessageCount = 0;
       }
 
+      // Fire-and-forget Whisper transcription for ptt deltas.
+      if (
+        storedMessageCount === 1 &&
+        str(deltaMessage.type).toLowerCase() === "ptt"
+      ) {
+        const vb = deltaMessage.voiceBlob;
+        if (vb && typeof vb === "object" && !Array.isArray(vb)) {
+          const vbObj = vb as Record<string, unknown>;
+          const dataUrl = typeof vbObj.dataUrl === "string" ? vbObj.dataUrl.trim() : "";
+          if (dataUrl) {
+            scheduleTranscriptions(
+              SUPABASE_URL,
+              SUPABASE_SERVICE_ROLE_KEY,
+              userId,
+              threadId,
+              [{ messageId: messageIdRaw, voiceBlob: vbObj }],
+            );
+          }
+        }
+      }
+
       fetch(
         `${SUPABASE_URL}/rest/v1/sync_events?event_id=eq.${encodeURIComponent(eventId)}`,
         {
