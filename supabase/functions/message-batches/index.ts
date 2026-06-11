@@ -142,7 +142,7 @@ serve(async (req) => {
 
   if (view === "contacts") {
     const threadsUrl = `${SUPABASE_URL}/rest/v1/thread_states?select=thread_id,sender,subject,provider${userFilter}&limit=2000`;
-    const messagesUrl = `${SUPABASE_URL}/rest/v1/scan_messages?select=id,thread_id,sender_id,sender,from_me,msg_timestamp,body,normalized_body,raw_body,msg_type,ack,has_reaction,is_forwarded,has_media,caption,mime_type,created_at${userFilter}&order=msg_timestamp.asc&limit=5000`;
+    const messagesUrl = `${SUPABASE_URL}/rest/v1/scan_messages?select=id,thread_id,sender_id,sender,from_me,msg_timestamp,body,normalized_body,raw_body,msg_type,ack,has_reaction,is_forwarded,has_media,caption,mime_type,transcription,created_at${userFilter}&order=msg_timestamp.asc&limit=5000`;
     const [threads, contactMessages] = await Promise.all([
       restGet(threadsUrl, SUPABASE_SERVICE_ROLE_KEY),
       restGet(messagesUrl, SUPABASE_SERVICE_ROLE_KEY),
