@@ -929,6 +929,36 @@ serve(async (req) => {
           body: JSON.stringify({ stored_message_count: storedMessageCount }),
         },
       ).catch((e) => console.warn("sync_events count patch failed:", (e as Error).message));
+
+      // Fire-and-forget Whisper transcription for ptt voice notes that
+      // shipped a non-empty voiceBlob.dataUrl. Only target rows we just
+      // inserted (rowsFiltered) so re-scans don't re-transcribe.
+      const voiceCandidates: { messageId: string; voiceBlob: Record<string, unknown> }[] = [];
+      const insertedIds = new Set(
+        rowsFiltered.map((r) => r.message_id).filter((x): x is string => !!x),
+      );
+      for (let i = 0; i < scanMessages.length; i++) {
+        const msg = (scanMessages[i] && typeof scanMessages[i] === "object")
+          ? (scanMessages[i] as Record<string, unknown>)
+          : null;
+        if (!msg) continue;
+        if (str(msg.type).toLowerCase() !== "ptt") continue;
+        const vb = msg.voiceBlob;
+        if (!vb || typeof vb !== "object" || Array.isArray(vb)) continue;
+        const vbObj = vb as Record<string, unknown>;
+        const dataUrl = typeof vbObj.dataUrl === "string" ? vbObj.dataUrl.trim() : "";
+        if (!dataUrl) continue;
+        const mid = truncate(str(msg.messageId) || str(msg.id), LIMITS.msgKey);
+        if (!mid || !insertedIds.has(mid)) continue;
+        voiceCandidates.push({ messageId: mid, voiceBlob: vbObj });
+      }
+      scheduleTranscriptions(
+        SUPABASE_URL,
+        SUPABASE_SERVICE_ROLE_KEY,
+        userId,
+        threadId,
+        voiceCandidates,
+      );
     }
 
     // 3) For chat_message_delta, persist the single new message (deduped).
