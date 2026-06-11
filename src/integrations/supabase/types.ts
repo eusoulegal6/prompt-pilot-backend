@@ -407,6 +407,7 @@ export type Database = {
           source_model_index: number | null
           subtype: string | null
           thread_id: string
+          transcription: string | null
           user_id: string
         }
         Insert: {
@@ -435,6 +436,7 @@ export type Database = {
           source_model_index?: number | null
           subtype?: string | null
           thread_id: string
+          transcription?: string | null
           user_id: string
         }
         Update: {
@@ -463,6 +465,7 @@ export type Database = {
           source_model_index?: number | null
           subtype?: string | null
           thread_id?: string
+          transcription?: string | null
           user_id?: string
         }
         Relationships: [

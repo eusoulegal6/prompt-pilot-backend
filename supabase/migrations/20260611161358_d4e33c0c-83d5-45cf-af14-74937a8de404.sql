@@ -1,0 +1,1 @@
+ALTER TABLE public.scan_messages ADD COLUMN IF NOT EXISTS transcription TEXT;
