@@ -18,7 +18,7 @@ const ContactWipeRestore = () => {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const call = useCallback(async (action: "status" | "wipe" | "restore") => {
+  const call = useCallback(async (action: "status" | "wipe" | "restore" | "refresh_captured_at") => {
     setBusy(action);
     setError(null);
     if (action !== "status") setMessage(null);
@@ -36,7 +36,9 @@ const ContactWipeRestore = () => {
         setMessage(
           action === "wipe"
             ? `Wiped. Backed up ${body.backed_up} rows.`
-            : `Restored ${body.restored} rows.`,
+            : action === "restore"
+            ? `Restored ${body.restored} rows.`
+            : `Updated ${body.updated_scans} scan snapshots.`,
         );
         await call("status");
       }
