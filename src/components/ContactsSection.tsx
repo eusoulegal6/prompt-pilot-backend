@@ -31,6 +31,7 @@ type ScanMessage = {
   caption: string | null;
   mime_type: string | null;
   created_at: string;
+  transcription: string | null;
 };
 
 type Contact = {
@@ -117,6 +118,9 @@ const ContactsSection = () => {
   }, [messages, threadMap]);
 
   const renderBody = (m: ScanMessage) => {
+    if (m.msg_type === "ptt" && m.transcription) {
+      return `🎙️ ${m.transcription}`;
+    }
     const text = m.body || m.normalized_body || m.raw_body || m.caption;
     if (text) return text;
     if (m.has_media) return `[${m.msg_type || "media"}${m.mime_type ? ` · ${m.mime_type}` : ""}]`;
