@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Trash2, RotateCcw, RefreshCw } from "lucide-react";
+import { Trash2, RotateCcw, RefreshCw, Clock } from "lucide-react";
 
 const FN_URL =
   "https://ocpphyjkstvfespxrajk.supabase.co/functions/v1/contact-wipe-restore";
@@ -18,7 +18,7 @@ const ContactWipeRestore = () => {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const call = useCallback(async (action: "status" | "wipe" | "restore") => {
+  const call = useCallback(async (action: "status" | "wipe" | "restore" | "refresh_captured_at") => {
     setBusy(action);
     setError(null);
     if (action !== "status") setMessage(null);
@@ -36,7 +36,9 @@ const ContactWipeRestore = () => {
         setMessage(
           action === "wipe"
             ? `Wiped. Backed up ${body.backed_up} rows.`
-            : `Restored ${body.restored} rows.`,
+            : action === "restore"
+            ? `Restored ${body.restored} rows.`
+            : `Updated ${body.updated_scans} scan snapshots.`,
         );
         await call("status");
       }
@@ -120,6 +122,14 @@ const ContactWipeRestore = () => {
         >
           <RotateCcw className="h-3.5 w-3.5" />
           {busy === "restore" ? "Restoring…" : "Restore backup"}
+        </button>
+        <button
+          onClick={() => call("refresh_captured_at")}
+          disabled={busy !== null || total === 0}
+          className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm text-card-foreground hover:bg-muted disabled:opacity-60"
+        >
+          <Clock className="h-3.5 w-3.5" />
+          {busy === "refresh_captured_at" ? "Updating…" : "Refresh timestamps"}
         </button>
       </div>
 

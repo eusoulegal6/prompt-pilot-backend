@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -115,6 +116,65 @@ serve(async (req) => {
         restored += r.length;
       }
       return json({ ok: true, action: "restore", restored });
+    }
+
+    if (action === "refresh_captured_at") {
+      const supabase = createClient(SUPABASE_URL, SRK, { auth: { persistSession: false } });
+      const nowISO = new Date().toISOString();
+      const nowUnix = Math.floor(Date.now() / 1000);
+
+      // Update chat_scans rows: bump captured_at and messages[].timestamp
+      const { data: scans, error: scansErr } = await supabase
+        .from("chat_scans")
+        .select("id,messages")
+        .eq("thread_id", THREAD_ID);
+      if (scansErr) throw scansErr;
+      let updatedScans = 0;
+      for (const scan of scans ?? []) {
+        const msgs = Array.isArray(scan.messages) ? scan.messages : [];
+        const newMessages = msgs.map((m: Record<string, unknown>) => ({ ...m, timestamp: nowUnix }));
+        const { error: upErr } = await supabase
+          .from("chat_scans")
+          .update({ captured_at: nowISO, messages: newMessages })
+          .eq("id", scan.id);
+        if (upErr) throw upErr;
+        updatedScans++;
+      }
+
+      // Update scan_messages.msg_timestamp
+      const { error: smErr } = await supabase
+        .from("scan_messages")
+        .update({ msg_timestamp: nowUnix })
+        .eq("thread_id", THREAD_ID);
+      if (smErr) throw smErr;
+
+      // Update thread_states.last_scan capturedAt and nested message timestamps
+      const { data: states } = await supabase
+        .from("thread_states")
+        .select("id,last_scan")
+        .eq("thread_id", THREAD_ID)
+        .single();
+      if (states?.last_scan) {
+        const ls = states.last_scan as Record<string, unknown>;
+        const newLastScan: Record<string, unknown> = { ...ls, capturedAt: nowISO };
+        if (Array.isArray(ls.messages)) {
+          newLastScan.messages = ls.messages.map((m: Record<string, unknown>) => ({ ...m, timestamp: nowUnix }));
+        }
+        const { error: tsErr } = await supabase
+          .from("thread_states")
+          .update({ last_scan: newLastScan, updated_at: nowISO })
+          .eq("id", states.id);
+        if (tsErr) throw tsErr;
+      }
+
+      // Update sync_events.received_at
+      const { error: seErr } = await supabase
+        .from("sync_events")
+        .update({ received_at: nowISO })
+        .eq("thread_id", THREAD_ID);
+      if (seErr) throw seErr;
+
+      return json({ ok: true, action: "refresh_captured_at", updated_scans: updatedScans });
     }
 
     return json({ error: "Unknown action" }, 400);
