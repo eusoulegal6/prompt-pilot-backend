@@ -28,6 +28,7 @@ type FlaggedItem = {
     captured_at: string;
     msg_type: string | null;
     source: "snapshot" | "scan";
+    transcription: string | null;
   }>;
   latest_scan_message_count?: number | null;
 };
@@ -212,7 +213,11 @@ const FlaggedReviewSection = () => {
                                   </span>
                                 ) : null}
                               </div>
-                              <p className="whitespace-pre-wrap">{m.body}</p>
+                              {m.msg_type === "ptt" && m.transcription ? (
+                                <p className="whitespace-pre-wrap">🎙️ {m.transcription}</p>
+                              ) : (
+                                <p className="whitespace-pre-wrap">{m.body}</p>
+                              )}
                             </li>
                           ))}
                         </ul>

@@ -232,14 +232,24 @@ serve(async (req) => {
       scanParams.set("limit", String(threadIds.length * 10));
       const scanUrl = `${SUPABASE_URL}/rest/v1/chat_scans?${scanParams.toString()}`;
 
+      // Individual scan messages (separate table) — needed for transcription data.
+      const smParams = new URLSearchParams();
+      smParams.set("user_id", `eq.${userId}`);
+      smParams.set("thread_id", `in.(${inList})`);
+      smParams.set("select", "thread_id,body,normalized_body,raw_body,caption,from_me,msg_timestamp,msg_type,transcription,created_at");
+      smParams.set("order", "created_at.desc");
+      smParams.set("limit", String(Math.min(500, threadIds.length * 25)));
+      const smUrl = `${SUPABASE_URL}/rest/v1/scan_messages?${smParams.toString()}`;
+
       const headers = {
         apikey: SUPABASE_SERVICE_ROLE_KEY,
         Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
       };
 
-      const [snapRes, scanRes] = await Promise.all([
+      const [snapRes, scanRes, smRes] = await Promise.all([
         fetch(snapUrl, { headers }),
         fetch(scanUrl, { headers }),
+        fetch(smUrl, { headers }),
       ]);
 
       const snapRows: Array<{
@@ -255,6 +265,19 @@ serve(async (req) => {
         message_count: number | null;
         messages: unknown;
       }> = scanRes.ok ? await scanRes.json() : [];
+
+      const smRows: Array<{
+        thread_id: string;
+        body: string | null;
+        normalized_body: string | null;
+        raw_body: string | null;
+        caption: string | null;
+        from_me: boolean | null;
+        msg_timestamp: number | null;
+        msg_type: string | null;
+        transcription: string | null;
+        created_at: string;
+      }> = smRes.ok ? await smRes.json() : [];
 
       const snapsByThread = new Map<string, typeof snapRows>();
       for (const row of snapRows) {
@@ -272,12 +295,21 @@ serve(async (req) => {
         scansByThread.set(row.thread_id, list);
       }
 
+      // Group scan_messages rows by thread.
+      const smByThread = new Map<string, typeof smRows>();
+      for (const row of smRows) {
+        const list = smByThread.get(row.thread_id) ?? [];
+        if (list.length < 20) list.push(row);
+        smByThread.set(row.thread_id, list);
+      }
+
       type RecentMsg = {
         body: string;
         from_me: boolean;
         captured_at: string;
         msg_type: string | null;
         source: "snapshot" | "scan";
+        transcription: string | null;
       };
 
       const normalizeScanMessages = (raw: unknown): RecentMsg[] => {
@@ -306,6 +338,7 @@ serve(async (req) => {
             captured_at,
             msg_type: typeof obj.type === "string" ? (obj.type as string) : null,
             source: "scan",
+            transcription: null,
           });
         }
         return out;
@@ -315,7 +348,23 @@ serve(async (req) => {
         const tid = String(item.thread_id);
         const snaps = snapsByThread.get(tid) ?? [];
         const scans = scansByThread.get(tid) ?? [];
+        const smList = smByThread.get(tid) ?? [];
         const scanMsgs = scans.flatMap((s) => normalizeScanMessages(s.messages));
+
+        // Map scan_messages rows into RecentMsg entries — the key addition
+        // here is the transcription field for voice-note messages.
+        const smMsgs: RecentMsg[] = smList
+          .map((m) => ({
+            body: (m.body || m.normalized_body || m.raw_body || m.caption || "").trim(),
+            from_me: Boolean(m.from_me),
+            captured_at: typeof m.msg_timestamp === "number"
+              ? new Date(m.msg_timestamp < 1e12 ? m.msg_timestamp * 1000 : m.msg_timestamp).toISOString()
+              : m.created_at,
+            msg_type: m.msg_type,
+            source: "scan" as const,
+            transcription: m.transcription,
+          }))
+          .filter((m) => m.body.length > 0);
 
         const merged: RecentMsg[] = [
           ...snaps
@@ -326,17 +375,30 @@ serve(async (req) => {
               captured_at: s.captured_at,
               msg_type: s.msg_type,
               source: "snapshot" as const,
+              transcription: null,
             })),
           ...scanMsgs,
+          ...smMsgs,
         ];
 
         // Dedupe by (body, from_me) keeping the most recent timestamp.
+        // Prefer entries that carry a transcription over otherwise-duplicate entries that lack one.
         const byKey = new Map<string, RecentMsg>();
         for (const m of merged) {
           const key = `${m.from_me ? 1 : 0}|${m.body.trim().slice(0, 240)}`;
           const existing = byKey.get(key);
-          if (!existing || (m.captured_at && m.captured_at > existing.captured_at)) {
+          if (!existing) {
             byKey.set(key, m);
+          } else {
+            const existingHasTranscription = Boolean(existing.transcription);
+            const newHasTranscription = Boolean(m.transcription);
+            if (newHasTranscription && !existingHasTranscription) {
+              byKey.set(key, m);
+            } else if (!newHasTranscription && existingHasTranscription) {
+              // keep existing entry that already has transcription
+            } else if (m.captured_at && m.captured_at > existing.captured_at) {
+              byKey.set(key, m);
+            }
           }
         }
 
