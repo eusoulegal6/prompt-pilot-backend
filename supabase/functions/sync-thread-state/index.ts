@@ -96,6 +96,173 @@ function extractUserIdFromJwt(token: string): string | null {
   }
 }
 
+// --- Whisper transcription for ptt voice notes -------------------------
+// Fire-and-forget: don't block the sync pipeline. Decode the data URL,
+// POST to OpenAI Whisper, then PATCH the scan_messages row.
+const VOICE_DATA_URL_RE = /^data:([^;,]+)(?:;[^,]*)?;base64,(.+)$/i;
+
+function decodeVoiceDataUrl(
+  dataUrl: string,
+): { bytes: Uint8Array; mimeType: string } | null {
+  const m = VOICE_DATA_URL_RE.exec(dataUrl.trim());
+  if (!m) return null;
+  const mimeType = m[1] || "audio/ogg";
+  try {
+    const bin = atob(m[2]);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return { bytes, mimeType };
+  } catch {
+    return null;
+  }
+}
+
+function filenameForMime(mimeType: string): string {
+  const m = mimeType.toLowerCase();
+  if (m.includes("ogg")) return "voice.ogg";
+  if (m.includes("mpeg") || m.includes("mp3")) return "voice.mp3";
+  if (m.includes("mp4") || m.includes("m4a") || m.includes("aac")) return "voice.m4a";
+  if (m.includes("wav")) return "voice.wav";
+  if (m.includes("webm")) return "voice.webm";
+  return "voice.ogg";
+}
+
+async function transcribeAndStore(
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  openaiKey: string,
+  scanMessageId: string,
+  threadId: string,
+  voiceBlob: Record<string, unknown>,
+): Promise<void> {
+  const dataUrl = typeof voiceBlob.dataUrl === "string" ? voiceBlob.dataUrl : "";
+  if (!dataUrl) return;
+  const decoded = decodeVoiceDataUrl(dataUrl);
+  if (!decoded || decoded.bytes.byteLength === 0) return;
+
+  const declaredMime = typeof voiceBlob.mimeType === "string" && voiceBlob.mimeType
+    ? (voiceBlob.mimeType as string)
+    : decoded.mimeType;
+  const filename = filenameForMime(declaredMime);
+
+  const form = new FormData();
+  form.append(
+    "file",
+    new Blob([decoded.bytes], { type: declaredMime }),
+    filename,
+  );
+  form.append("model", "whisper-1");
+  form.append("response_format", "text");
+
+  let transcription = "";
+  try {
+    const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${openaiKey}` },
+      body: form,
+    });
+    if (!res.ok) {
+      const errText = (await res.text()).slice(0, 200);
+      console.warn(
+        `whisper transcription failed status=${res.status} thread=${threadId} body=${errText}`,
+      );
+      return;
+    }
+    transcription = (await res.text()).trim();
+  } catch (e) {
+    console.warn(`whisper fetch error: ${(e as Error).message}`);
+    return;
+  }
+  if (!transcription) return;
+
+  const patchRes = await fetch(
+    `${supabaseUrl}/rest/v1/scan_messages?id=eq.${scanMessageId}&transcription=is.null`,
+    {
+      method: "PATCH",
+      headers: {
+        apikey: serviceRoleKey,
+        Authorization: `Bearer ${serviceRoleKey}`,
+        "Content-Type": "application/json",
+        Prefer: "return=minimal",
+      },
+      body: JSON.stringify({ transcription }),
+    },
+  );
+  if (!patchRes.ok) {
+    console.warn(
+      `transcription patch failed status=${patchRes.status} id=${scanMessageId}`,
+    );
+  }
+}
+
+function scheduleTranscriptions(
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  userId: string,
+  threadId: string,
+  candidates: { messageId: string; voiceBlob: Record<string, unknown> }[],
+): void {
+  if (candidates.length === 0) return;
+  const openaiKey = Deno.env.get("OPENAI_API_KEY");
+  if (!openaiKey) {
+    console.warn("OPENAI_API_KEY not configured; skipping voice transcription");
+    return;
+  }
+
+  const task = (async () => {
+    // Look up DB ids + current transcription state to honor the dedup rule.
+    const ids = candidates.map((c) => c.messageId);
+    const inList = ids.map((id) => `"${id.replace(/"/g, '\\"')}"`).join(",");
+    const lookupUrl =
+      `${supabaseUrl}/rest/v1/scan_messages?user_id=eq.${userId}` +
+      `&thread_id=eq.${encodeURIComponent(threadId)}` +
+      `&message_id=in.(${encodeURIComponent(inList)})` +
+      `&select=id,message_id,transcription`;
+    const r = await fetch(lookupUrl, {
+      headers: { apikey: serviceRoleKey, Authorization: `Bearer ${serviceRoleKey}` },
+    });
+    if (!r.ok) {
+      console.warn(`transcription lookup failed status=${r.status}`);
+      return;
+    }
+    const rows = await r.json();
+    if (!Array.isArray(rows)) return;
+    const byMessageId = new Map<string, { id: string; transcription: string | null }>();
+    for (const row of rows) {
+      if (row && typeof row.message_id === "string" && typeof row.id === "string") {
+        byMessageId.set(row.message_id, { id: row.id, transcription: row.transcription ?? null });
+      }
+    }
+    for (const c of candidates) {
+      const target = byMessageId.get(c.messageId);
+      if (!target) continue;
+      if (target.transcription && target.transcription.length > 0) continue; // dedup
+      try {
+        await transcribeAndStore(
+          supabaseUrl,
+          serviceRoleKey,
+          openaiKey,
+          target.id,
+          threadId,
+          c.voiceBlob,
+        );
+      } catch (e) {
+        console.warn(`transcription task error: ${(e as Error).message}`);
+      }
+    }
+  })();
+
+  // Deno Deploy / Supabase Edge Runtime: keep the task alive after response.
+  const runtime = (globalThis as { EdgeRuntime?: { waitUntil: (p: Promise<unknown>) => void } })
+    .EdgeRuntime;
+  if (runtime?.waitUntil) {
+    runtime.waitUntil(task);
+  } else {
+    task.catch((e) => console.warn(`transcription task rejected: ${(e as Error).message}`));
+  }
+}
+// ------------------------------------------------------------------------
+
 async function sha256Hex(input: string): Promise<string> {
   const data = new TextEncoder().encode(input);
   const hash = await crypto.subtle.digest("SHA-256", data);
